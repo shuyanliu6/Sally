@@ -1,0 +1,44 @@
+# Secrets
+.env
+*.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# Runtime data
+*.db
+*.sqlite
+*.log
+.Rhistory
+logs/
+data/parquet/
+questdb_data/
+
+# Project runtime artifacts
+DataLayer/quantamental/config/.env
+DataLayer/quantamental/data/meta.db
+DataLayer/quantamental/data/parquet/
+DataLayer/quantamental/logs/
+DataLayer/logs/
+
+# Generated/user-managed configs
+DataLayer/quantamental/config/research_tickers.json
+DataLayer/quantamental/config/candidate_list.json
+
+# macOS/editor
+.DS_Store
+.vscode/
+.idea/
+.claude/settings.local.json

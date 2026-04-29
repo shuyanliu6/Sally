@@ -1,0 +1,48 @@
+# Data acquisition
+polygon-api-client>=1.14.0
+fredapi>=0.5.2
+
+# Data processing
+pandas>=2.2.0
+numpy>=1.26.0
+
+# Database connectivity
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.0
+
+# Visualization & Dashboard
+matplotlib>=3.8.0
+plotly>=5.18.0
+streamlit>=1.32.0
+
+# Utilities
+python-dotenv>=1.0.0
+schedule>=1.2.0
+requests>=2.31.0
+
+# Market calendar (holiday-aware prev_trading_day)
+pandas-market-calendars>=4.0.0
+
+# Non-blocking dashboard auto-refresh
+streamlit-autorefresh>=1.0.1
+
+# HTML parsing for pandas.read_html (Wikipedia S&P 1500 scraping)
+lxml>=4.9.0
+
+# ── Month 2 ───────────────────────────────────────────────────────────────────
+# Backtesting engine
+vectorbt>=0.26.0
+# Technical analysis indicators (RSI, EMA convenience)
+ta>=0.11.0
+# Statistical tests (Deflated Sharpe, t-tests for parameter sensitivity)
+scipy>=1.12.0
+# Analytical queries over Parquet cold storage
+duckdb>=0.10.0
+# Parquet I/O
+pyarrow>=15.0.0
+
+# Fundamentals fallback (Polygon free tier doesn't include /v3/reference/financials)
+yfinance>=0.2.40
+
+# Signal registry (config/signals_registry.yaml)
+PyYAML>=6.0

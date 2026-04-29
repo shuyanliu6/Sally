@@ -1,0 +1,89 @@
+# Signal Registry — quantamental/config/signals_registry.yaml
+#
+# This is the single file you edit to add, remove, enable/disable, or
+# re-weight signals. No Python changes are needed for enable/disable or
+# weight adjustments.
+#
+# Each signal entry:
+#   enabled:     true | false — whether the signal is included in the composite
+#   weight:      float        — relative weight within its layer (1.0 = standard)
+#   description: string       — human-readable label shown in logs and dashboard
+#
+# Adding a brand-new signal (beyond enabling/disabling):
+#   1. Write a scorer function in signals/ returning int in [-2, +2]
+#   2. Add an entry here (enabled: true, weight: ..., description: ...)
+#   3. Wire it into the layer's compute_*() function with a registry.is_enabled() guard
+#   4. If a new DB column is needed, add it to data/ingest/questdb_writer.py init_schema()
+#
+# Layer weights control how much each layer contributes to the final
+# 3-layer composite (macro dominates; stock signals are noisiest).
+# ─────────────────────────────────────────────────────────────────────────────
+
+macro:
+  layer_weight: 1.0
+  signals:
+    yield_10y:
+      enabled: true
+      weight: 1.0
+      description: "10Y Treasury yield MA crossover (FRED DGS10)"
+
+    vix:
+      enabled: true
+      weight: 1.0
+      description: "VIX fear gauge — absolute level buckets (FRED VIXCLS)"
+
+    fed_balance_sheet:
+      enabled: true
+      weight: 1.0
+      description: "Fed balance sheet 13-week trend (FRED WALCL)"
+
+    credit_spread:
+      enabled: true
+      weight: 1.0
+      description: "IG OAS credit spread MA crossover (FRED BAMLC0A0CM)"
+
+sector:
+  layer_weight: 0.8
+  signals:
+    sox_spx:
+      enabled: true
+      weight: 1.0
+      description: "SOX/SPX relative strength — SMH vs SPY EMA(20/60)"
+
+    tsmc_revenue:
+      enabled: true
+      weight: 1.0
+      description: "TSMC monthly revenue YoY trend (manual entry via log_tsmc_revenue.py)"
+
+    capex_surprise:
+      enabled: true
+      weight: 1.0
+      description: "Hyperscaler capex vs consensus (manual entry via log_capex.py)"
+
+    api_pricing:
+      enabled: true
+      weight: 1.0
+      description: "AI API price deflation trend (manual entry via log_api_pricing.py)"
+
+stock:
+  layer_weight: 0.6
+  signals:
+    ema:
+      enabled: true
+      weight: 1.0
+      description: "EMA(20/60) crossover — trend direction and strength"
+
+    rsi:
+      enabled: true
+      weight: 1.0
+      description: "RSI(14) mean reversion — overbought/oversold buckets"
+
+    volume:
+      enabled: true
+      weight: 1.0
+      description: "Volume confirmation — breakout/breakdown on high volume"
+
+    pead:
+      enabled: true
+      weight: 1.0
+      description: "Post-earnings announcement drift with 4-week linear decay"
