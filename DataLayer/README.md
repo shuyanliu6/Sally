@@ -70,6 +70,41 @@ cd /Users/shuyan/Desktop/nothing/Sally/DataLayer/quantamental
 streamlit run dashboard/app.py
 ```
 
+## Dashboard Reading Guide
+
+The dashboard is a decision-support cockpit, not an auto-trading screen. Read it
+in this order:
+
+1. **Overview** — start here. It combines current macro regime, sector score,
+   latest alpha leader, target exposure, portfolio drift, and the next action
+   queue. If this page says `De-risk` or `Selective only`, treat all buy ideas
+   as research candidates rather than orders.
+2. **Alpha** — check the ranked stock book and validation evidence. `Alpha
+   Book` shows today's ranked `TOP_BUY`, `BUY`, `HOLD`, and `AVOID` buckets plus
+   target weights. `Alpha Validation` shows whether those buckets have actually
+   beaten `SMH` and the equal-weight candidate basket over forward 20/40 trading
+   days.
+3. **Signals** — inspect why the system is risk-on or risk-off. Macro signals
+   explain liquidity/risk appetite; sector signals explain AI-infra cycle
+   strength; stock signals explain ticker-level momentum, volume, RSI, and PEAD.
+4. **Portfolio** — compare current positions against target weights, current
+   P&L, and stop-loss distance before acting.
+5. **Universe** — edit the candidate list. This controls which tickers the
+   alpha engine ranks and which names appear in the dashboard decision flow.
+
+Key interpretation rules:
+
+- `TOP_BUY` is only useful if validation is healthy. A negative `top-vs-avoid`
+  spread means the ranker has not recently separated winners from avoid names.
+- `Rank IC` measures whether higher ranks tend to produce better forward
+  returns. Positive is good; near zero means weak ordering power.
+- `RISK_OFF` blocks new long allocations in the V1 portfolio logic and should
+  push the system toward cash.
+- Negative sector composite caps deployment even when individual stocks look
+  strong.
+- Target weights are portfolio suggestions under the model assumptions, not
+  trade instructions.
+
 Run tests:
 
 ```bash

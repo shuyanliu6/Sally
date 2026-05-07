@@ -51,6 +51,30 @@ def load_latest_alpha_ranks(output_dir: str | Path | None = None) -> pd.DataFram
     return pd.read_parquet(latest)
 
 
+def _latest_csv(pattern: str, directory: Path) -> Path | None:
+    matches = sorted(directory.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    return matches[0] if matches else None
+
+
+def load_latest_alpha_performance(output_dir: str | Path | None = None) -> dict[str, pd.DataFrame]:
+    """Load latest saved alpha performance headline and bucket summary."""
+    performance_dir = _output_dir(output_dir) / "performance"
+    if not performance_dir.exists():
+        return {"headline": pd.DataFrame(), "bucket_summary": pd.DataFrame()}
+
+    headline_path = performance_dir / "alpha_performance_headline_latest.csv"
+    if not headline_path.exists():
+        headline_path = _latest_csv("alpha_performance_headline_*.csv", performance_dir)
+
+    bucket_path = performance_dir / "alpha_performance_buckets_latest.csv"
+    if not bucket_path.exists():
+        bucket_path = _latest_csv("alpha_performance_buckets_*.csv", performance_dir)
+
+    headline = pd.read_csv(headline_path) if headline_path and headline_path.exists() else pd.DataFrame()
+    bucket_summary = pd.read_csv(bucket_path) if bucket_path and bucket_path.exists() else pd.DataFrame()
+    return {"headline": headline, "bucket_summary": bucket_summary}
+
+
 def persist_alpha_ranks_to_questdb(ranks: pd.DataFrame) -> int:
     """Persist alpha ranks to QuestDB. Explicit opt-in from CLI only."""
     if ranks.empty:
@@ -124,13 +148,16 @@ def save_alpha_performance_report(report, output_dir: str | Path | None = None) 
     buckets = out_dir / f"alpha_performance_buckets_{stamp}.csv"
     headline = out_dir / f"alpha_performance_headline_{stamp}.csv"
     latest_headline = out_dir / "alpha_performance_headline_latest.csv"
+    latest_buckets = out_dir / "alpha_performance_buckets_latest.csv"
     report.rank_log.to_csv(rank_log, index=False)
     report.bucket_summary.to_csv(buckets, index=False)
     report.headline.to_csv(headline, index=False)
     report.headline.to_csv(latest_headline, index=False)
+    report.bucket_summary.to_csv(latest_buckets, index=False)
     return {
         "rank_log": rank_log,
         "bucket_summary": buckets,
         "headline": headline,
         "latest_headline": latest_headline,
+        "latest_buckets": latest_buckets,
     }

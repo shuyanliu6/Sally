@@ -191,37 +191,264 @@ Exit code `0` = healthy, `1` = issues found.
 
 ## 3. Reading the dashboard
 
-The dashboard has 4 panels stacked vertically. Spec §7.1.
+The dashboard is now a tabbed decision cockpit:
 
-### 3.1 Panel A — Macro Regime
-- **Big colored title** = current regime: `RISK_ON`, `MODERATE_ON`, `NEUTRAL`, `MODERATE_OFF`, `RISK_OFF`
-- **Composite score** in parentheses (range −8 to +8)
-- **Four sub-panel scores** below: 10Y Yield, VIX, Fed Balance Sheet, Credit Spread (each ±2)
+```text
+Overview | Alpha | Signals | Portfolio | Universe
+```
 
-**What each regime means** (spec §6.5):
+It is designed for **decision support**, not automatic trading. The right way
+to read it is top-down:
+
+1. **Can I take risk?** Start with `Overview` and `Signals`.
+2. **What should I research or buy?** Move to `Alpha`.
+3. **Does the model deserve trust?** Read `Alpha Validation` before acting.
+4. **What does my current book require?** Check `Portfolio`.
+5. **Is the candidate universe correct?** Use `Universe` only when the watchlist
+   itself needs editing.
+
+### 3.1 Overview — command center
+
+The `Overview` tab compresses the whole system into a daily decision queue.
+
+Top metrics:
+
+| Metric | Meaning | How to read it |
+|---|---|---|
+| `Stance` | System-level posture: Deploy, Hold, or De-risk | This is the first risk filter before any stock idea |
+| `Sector` | Latest AI-infra sector composite | Positive supports deployment; negative means cap exposure |
+| `Top Alpha` | Highest ranked ticker today | Research lead, not an order |
+| `Target Risk` | Sum of current model target weights | Low value means the model wants cash |
+| `Open Positions` | Number of active positions in SQLite | Use with the rebalance queue |
+
+Action cards:
+
+- `Deploy selectively`: macro and sector context allow new long exposure.
+- `Selective only`: sector is weak, so require stronger stock evidence and
+  smaller deployment.
+- `De-risk`: macro regime blocks new buys; cash and stop review come first.
+- Ticker-specific cards such as `Research NVDA`, `Add MSFT`, or `Review AMD`
+  compare current holdings with alpha target weights.
+
+Risk flags:
+
+- `Macro permits risk`: macro composite is supportive.
+- `Macro below neutral`: risk budget should be smaller.
+- `Macro risk-off: block new buys`: do not open new long positions under V1.
+- `Sector cap active`: even good stock ranks should be position-sized smaller.
+- `Target exposure only X%`: the portfolio engine is intentionally holding cash.
+
+Principle: `Overview` is not trying to explain every signal. It answers the
+manager question: **what deserves attention today?**
+
+### 3.2 Alpha — stock selection and validation
+
+The `Alpha` tab has two parts: `Alpha Book` and `Alpha Validation`.
+
+#### Alpha Book
+
+`Alpha Book` is the live ranker output for the AI-infra candidate universe.
+
+Important columns:
+
+| Column | Meaning |
+|---|---|
+| `Rank` | Cross-sectional order, best idea first |
+| `Ticker` | Candidate symbol |
+| `Bucket` | `TOP_BUY`, `BUY`, `HOLD`, or `AVOID` |
+| `Alpha` | Transparent weighted score, not ML |
+| `Target` | Suggested portfolio weight after risk rules |
+| `Stock` | Stock-level composite from EMA, RSI, volume, PEAD |
+| `Momentum` | Recent return/momentum input |
+| `Vol` | Recent realized volatility, used as risk control |
+| `Drawdown` | Recent peak-to-trough pressure |
+| `Macro` | Macro regime attached to the rank row |
+| `Sector` | Sector composite attached to the rank row |
+
+Bucket interpretation:
+
+| Bucket | Meaning | Operating action |
+|---|---|---|
+| `TOP_BUY` | Highest conviction names after scoring | Research first; eligible for target weights if risk allows |
+| `BUY` | Positive rank, but lower conviction than top names | Candidate for weekly rebalance |
+| `HOLD` | Not bad enough to avoid, not strong enough to add | Keep watching; avoid forcing action |
+| `AVOID` | Weak relative score or risk profile | Do not initiate unless you have an external thesis |
+
+Portfolio rules embedded in targets:
+
+- Long-only V1.
+- Weekly rebalance bias, not daily trading.
+- Max single-stock weight: 15%.
+- Minimum active position weight: 5%.
+- `RISK_OFF` blocks new buys and pushes cash to at least 50%.
+- Negative sector composite caps deployed exposure.
+
+Principle: the alpha score is **cross-sectional**. A ticker is ranked against
+the current candidate universe, not judged in isolation.
+
+#### Alpha Validation
+
+This is the fund-manager quality-control panel. It asks whether the ranker has
+actually shown selection power historically.
+
+Top metrics:
+
+| Metric | Meaning | Good sign |
+|---|---|---|
+| `20D top spread` | Forward 20-trading-day excess return of `TOP_BUY/BUY` minus `AVOID` | Positive |
+| `40D top spread` | Same idea over 40 trading days | Positive |
+| `20D rank IC` | Correlation between rank score and 20D forward excess return | Positive and persistent |
+| `40D rank IC` | Correlation between rank score and 40D forward excess return | Positive and persistent |
+
+Bucket table:
+
+| Column | Meaning |
+|---|---|
+| `Avg excess vs SMH` | Bucket average return minus `SMH` over the same horizon |
+| `Avg excess vs EW` | Bucket average return minus equal-weight candidate basket |
+| `Win vs SMH` | Share of observations beating `SMH` |
+| `Win vs EW` | Share of observations beating the candidate basket |
+| `Avg alpha` | Average alpha score inside the bucket |
+
+How to interpret:
+
+- If `TOP_BUY/BUY` beats `AVOID`, the ranker is separating stronger names from
+  weaker names.
+- If `top spread` is negative, the ranker is not yet proven, even if today's
+  top names look intuitively attractive.
+- If `Rank IC` is positive but spread is negative, ordering has some signal but
+  bucket thresholds or portfolio construction may need work.
+- If both spread and IC are weak, treat the engine as a monitoring tool until
+  the signal design improves.
+
+Principle: this panel prevents the dashboard from becoming a storytelling
+machine. A good-looking rank must be backed by forward-return evidence.
+
+To refresh this panel:
+
+```bash
+cd /Users/shuyan/Desktop/nothing/Sally/DataLayer/quantamental
+python scripts/alpha_performance.py --start 2025-01-01 --end 2026-04-01
+```
+
+### 3.3 Signals — why the risk posture changed
+
+The `Signals` tab explains the inputs behind the stance.
+
+#### Macro Regime
+
+The macro regime combines four signals:
+
+| Signal | Source | Intuition |
+|---|---|---|
+| 10Y yield | FRED `DGS10` | Falling yields support equities; rising yields tighten conditions |
+| VIX | Market volatility | Low/normal volatility supports risk; panic raises caution |
+| Fed balance sheet | FRED `WALCL` | Expansion supports liquidity; contraction tightens liquidity |
+| Credit spread | FRED IG OAS | Tightening spreads show risk appetite; widening spreads warn stress |
+
+Regime interpretation:
 
 | Regime | Composite | Action |
 |---|---|---|
 | `RISK_ON` | +5 to +8 | Full allocation per plan; accelerate batch entries |
 | `MODERATE_ON` | +2 to +4 | Maintain positions; proceed with scheduled entries |
-| `NEUTRAL` | −1 to +1 | Hold; no new entries unless event-driven |
-| `MODERATE_OFF` | −4 to −2 | Pause new entries; tighten stop-losses by 5% |
-| `RISK_OFF` | −8 to −5 | Reduce exposure 25–50%; activate hedges |
+| `NEUTRAL` | -1 to +1 | Hold; no new entries unless event-driven |
+| `MODERATE_OFF` | -4 to -2 | Pause new entries; tighten stop-losses by 5% |
+| `RISK_OFF` | -8 to -5 | Reduce exposure; block new long allocations in V1 |
 
-### 3.2 Panel B — Portfolio Overview
-- Per-position table: Entry $, Current $, Shares, P&L $, P&L %, Weight %
-- P&L colored green/red
-- Total P&L at the bottom
+#### Sector Signal
 
-### 3.3 Panel C — Stop-Loss Monitor
-- Progress bar per position: how close it is to its stop-loss price
-- 🟢 if more than 5% above stop
-- 🔴 if within 5% (alert zone)
+The sector panel measures whether the AI-infra cycle is supportive.
 
-### 3.4 Panel D — Signal History
-- Composite score line chart, last 60 days
-- Background bands shaded by regime (green/yellow/red zones)
-- Visually inspect for regime transitions
+Core inputs:
+
+- `SMH/SPY` or semiconductor relative trend.
+- TSMC monthly revenue.
+- Hyperscaler capex surprise.
+- AI API pricing pressure.
+
+Read it as a deployment throttle:
+
+- Positive sector score: alpha ranks can be used normally if macro allows.
+- Slightly negative sector score: only strongest names deserve capital.
+- Deeply negative sector score: cap exposure and avoid expanding the book.
+
+#### Stock Signal Detail
+
+The stock detail panel explains ticker-level evidence:
+
+- EMA trend: medium-term trend quality.
+- RSI: overbought/oversold pressure.
+- Volume: confirmation or distribution.
+- PEAD: post-earnings announcement drift.
+- Stock composite: normalized aggregate of these signals.
+
+Principle: a strong stock score can identify relative winners, but it should not
+override macro `RISK_OFF` or a broken sector backdrop.
+
+#### Signal History
+
+The history chart shows whether regime changes are stable or noisy.
+
+Use it to ask:
+
+- Did the composite just flip today, or has it been trending for weeks?
+- Is the system improving from risk-off to neutral, or deteriorating from
+  risk-on to moderate-off?
+- Are current recommendations aligned with the recent regime path?
+
+### 3.4 Portfolio — current book risk
+
+The `Portfolio` tab compares the model target book with actual holdings.
+
+Read in this order:
+
+1. Target vs current weight: find adds, trims, exits, and unowned buy
+   candidates.
+2. P&L table: check whether losses are thesis breaks or normal volatility.
+3. Stop-loss monitor: review names near stop before considering new buys.
+
+Common actions:
+
+| Dashboard action | Meaning |
+|---|---|
+| `NEW BUY` | Model has target weight, but you do not own it |
+| `ADD` | Current weight is below target |
+| `TRIM` | Current weight is above target |
+| `EXIT/REVIEW` | Position no longer has target allocation |
+| `HOLD` | Current weight is close enough to target |
+| `WATCH` | No immediate portfolio action |
+
+Principle: portfolio management comes after signal review. Do not add a new
+name while an existing position is breaching risk limits.
+
+### 3.5 Universe — candidate list control
+
+The `Universe` tab edits the candidate list. This is the active stock universe
+for alpha ranking, dashboard display, fundamentals refresh, and candidate-level
+stock signals.
+
+Use it when:
+
+- A new AI-infra name deserves ongoing monitoring.
+- A ticker thesis is stale and should be removed.
+- You want to group candidates by sector or theme.
+- You need to leave a note explaining why the list changed.
+
+Principle: garbage in, garbage out. The ranker can only select from the names
+you allow into the candidate universe.
+
+### 3.6 Daily dashboard reading checklist
+
+Before making any trade decision:
+
+1. Confirm data is fresh with `python scripts/check_data.py`.
+2. Open `Overview`; note stance, target exposure, and risk flags.
+3. Open `Alpha`; check whether validation supports trusting the ranker.
+4. Review top `TOP_BUY` and `BUY` names, but reject them if macro or sector
+   gates are closed.
+5. Open `Portfolio`; handle stop-loss and drift issues before new entries.
+6. Log any actual trade decision in the journal.
 
 ---
 

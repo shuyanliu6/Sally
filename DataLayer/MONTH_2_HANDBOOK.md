@@ -32,6 +32,12 @@ burden is **3 manual data feeds**:
 
 Total ongoing: **~30 minutes per month**.
 
+Dashboard reading note: the current Streamlit app is organized as
+`Overview | Alpha | Signals | Portfolio | Universe`. Use `USER_MANUAL.md`
+section 3 as the primary read-screen guide. This handbook remains the deeper
+reference for how the Month 2 sector and stock signals are sourced, scored, and
+verified.
+
 ---
 
 ## 0.1 Signal registry — customising which signals are active

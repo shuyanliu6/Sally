@@ -91,3 +91,14 @@ def load_latest_alpha_ranks() -> pd.DataFrame:
     except Exception as exc:
         st.warning(f"Alpha ranks unavailable: {exc}")
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=60)
+def load_latest_alpha_performance() -> dict[str, pd.DataFrame]:
+    try:
+        from quantamental.alpha.reporting import load_latest_alpha_performance as _load
+
+        return _load()
+    except Exception as exc:
+        st.warning(f"Alpha performance unavailable: {exc}")
+        return {"headline": pd.DataFrame(), "bucket_summary": pd.DataFrame()}

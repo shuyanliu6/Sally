@@ -37,6 +37,13 @@ def _pct(value) -> str:
         return "0.0%"
 
 
+def _signed_pct(value) -> str:
+    try:
+        return f"{float(value):+.1%}"
+    except (TypeError, ValueError):
+        return "+0.0%"
+
+
 def _score(value) -> str:
     try:
         return f"{float(value):+.0f}"
@@ -718,6 +725,151 @@ def render_panel_h_alpha(ranks: pd.DataFrame | None = None, compact: bool = Fals
 
     styled = display.style.map(bucket_style, subset=["Bucket"]) if "Bucket" in display else display
     st.dataframe(styled, use_container_width=True, hide_index=True, height=330 if compact else None)
+
+
+def render_panel_i_alpha_validation(performance: dict[str, pd.DataFrame] | None = None):
+    panel_header("Alpha Validation", "Performance", "forward 20/40d")
+    performance = performance or {}
+    headline = performance.get("headline", pd.DataFrame())
+    buckets = performance.get("bucket_summary", pd.DataFrame())
+
+    if headline.empty:
+        st.info(
+            "No alpha performance report saved yet. Run:\n\n"
+            "`python scripts/alpha_performance.py --start YYYY-MM-DD --end YYYY-MM-DD`"
+        )
+        return
+
+    headline = headline.copy()
+    if "horizon" in headline:
+        headline["horizon"] = pd.to_numeric(headline["horizon"], errors="coerce")
+    for col in [
+        "observations",
+        "top_buy_buy_avg_excess",
+        "avoid_avg_excess",
+        "top_minus_avoid",
+        "mean_rank_ic",
+        "rank_dates",
+    ]:
+        if col in headline:
+            headline[col] = pd.to_numeric(headline[col], errors="coerce")
+
+    def row_for_horizon(horizon: int) -> pd.Series:
+        if "horizon" not in headline:
+            return pd.Series(dtype=object)
+        rows = headline[headline["horizon"].eq(horizon)]
+        return rows.iloc[0] if not rows.empty else pd.Series(dtype=object)
+
+    h20 = row_for_horizon(20)
+    h40 = row_for_horizon(40)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("20D top spread", _signed_pct(h20.get("top_minus_avoid")), "TOP/BUY minus AVOID")
+    c2.metric("20D rank IC", f"{_num(h20.get('mean_rank_ic')):+.3f}", f"{int(_num(h20.get('rank_dates')))} dates")
+    c3.metric("40D top spread", _signed_pct(h40.get("top_minus_avoid")), "TOP/BUY minus AVOID")
+    c4.metric("40D rank IC", f"{_num(h40.get('mean_rank_ic')):+.3f}", f"{int(_num(h40.get('rank_dates')))} dates")
+
+    flags: list[tuple[str, str]] = []
+    for _, row in headline.sort_values("horizon").iterrows():
+        horizon = int(_num(row.get("horizon")))
+        spread = _num(row.get("top_minus_avoid"))
+        ic = _num(row.get("mean_rank_ic"))
+        kind = "ok" if spread > 0 else "risk" if spread < 0 else "watch"
+        flags.append((kind, f"{horizon}D top-vs-avoid {_signed_pct(spread)}"))
+        flags.append(("ok" if ic > 0 else "risk" if ic < 0 else "watch", f"{horizon}D rank IC {ic:+.3f}"))
+    flag_html = "".join(
+        f"<span class='q-flag q-flag-{kind}'>{escape(text)}</span>"
+        for kind, text in flags
+    )
+    st.markdown(flag_html, unsafe_allow_html=True)
+
+    chart = headline.dropna(subset=["horizon"]).copy()
+    if not chart.empty and {"top_minus_avoid", "mean_rank_ic"}.issubset(chart.columns):
+        chart["label"] = chart["horizon"].astype(int).astype(str) + "D"
+        fig = go.Figure()
+        fig.add_trace(
+            go.Bar(
+                x=chart["label"],
+                y=chart["top_minus_avoid"],
+                name="Top spread",
+                marker=dict(
+                    color=[
+                        COLOR["positive"] if _num(v) >= 0 else COLOR["negative"]
+                        for v in chart["top_minus_avoid"]
+                    ]
+                ),
+                hovertemplate="%{x}<br>Top spread: %{y:.2%}<extra></extra>",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=chart["label"],
+                y=chart["mean_rank_ic"],
+                name="Rank IC",
+                mode="lines+markers",
+                line=dict(color=COLOR["info"], width=2),
+                marker=dict(size=8),
+                yaxis="y2",
+                hovertemplate="%{x}<br>Rank IC: %{y:.3f}<extra></extra>",
+            )
+        )
+        fig.add_hline(y=0, line=dict(color=COLOR["line"], width=1))
+        fig.update_layout(
+            yaxis=dict(title="Top spread", tickformat=".1%"),
+            yaxis2=dict(title="Rank IC", overlaying="y", side="right", zeroline=False),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        )
+        style_plot(fig, height=285, showlegend=True)
+        st.plotly_chart(fig, use_container_width=True)
+
+    if buckets.empty:
+        st.caption("Bucket-level validation is not available in the latest report.")
+        return
+
+    bucket_display = buckets.copy()
+    if "horizon" in bucket_display:
+        bucket_display["horizon"] = pd.to_numeric(bucket_display["horizon"], errors="coerce").astype("Int64")
+    keep = [
+        "horizon",
+        "bucket",
+        "n",
+        "avg_excess_SMH",
+        "avg_excess_equal_weight",
+        "win_rate_vs_SMH",
+        "win_rate_vs_equal_weight",
+        "avg_alpha_score",
+    ]
+    existing = [c for c in keep if c in bucket_display.columns]
+    bucket_display = bucket_display[existing].copy()
+
+    for col in ["avg_excess_SMH", "avg_excess_equal_weight"]:
+        if col in bucket_display:
+            bucket_display[col] = bucket_display[col].map(_signed_pct)
+    for col in ["win_rate_vs_SMH", "win_rate_vs_equal_weight"]:
+        if col in bucket_display:
+            bucket_display[col] = bucket_display[col].map(_pct)
+    if "avg_alpha_score" in bucket_display:
+        bucket_display["avg_alpha_score"] = bucket_display["avg_alpha_score"].map(lambda v: f"{_num(v):.1f}")
+
+    bucket_display = bucket_display.rename(
+        columns={
+            "horizon": "Horizon",
+            "bucket": "Bucket",
+            "n": "N",
+            "avg_excess_SMH": "Avg excess vs SMH",
+            "avg_excess_equal_weight": "Avg excess vs EW",
+            "win_rate_vs_SMH": "Win vs SMH",
+            "win_rate_vs_equal_weight": "Win vs EW",
+            "avg_alpha_score": "Avg alpha",
+        }
+    )
+
+    def bucket_style(value):
+        color = bucket_color(str(value).replace(" ", "_"))
+        return f"color: {color}; font-weight: 700"
+
+    styled = bucket_display.style.map(bucket_style, subset=["Bucket"]) if "Bucket" in bucket_display else bucket_display
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
 def render_panel_e_candidate_editor():
