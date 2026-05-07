@@ -196,7 +196,7 @@ def stock_composite_score(ema_score: int, rsi_score: int,
     Per-signal max absolute values (used for normalisation):
         ema: ±2, rsi: ±2, volume: ±1, pead: ±2  →  total max = 7
     """
-    from signals import registry as _reg
+    from quantamental.signals import registry as _reg
 
     # (registry_name, score, max_abs_value_for_this_signal)
     _COMPONENTS = [
@@ -294,9 +294,10 @@ def compute_stock_signals_for_universe(
 
     Returns: DataFrame of all per-ticker signal rows.
     """
-    from config.universe import load_research_universe
-    from data.ingest.questdb_writer import (
+    from quantamental.config.universe import load_research_universe
+    from quantamental.data.ingest.questdb_writer import (
         query,
+        symbol_list_clause,
         write_signal_event,
         write_stock_signals,
     )
@@ -308,15 +309,15 @@ def compute_stock_signals_for_universe(
     if not universe:
         return pd.DataFrame()
 
-    safe_list = ", ".join(f"'{t.replace(chr(39), chr(39)*2)}'" for t in universe)
+    clause, params = symbol_list_clause(universe)
     sql = f"""
         SELECT symbol, ts, close, volume
         FROM daily_ohlcv
-        WHERE symbol IN ({safe_list})
+        WHERE symbol IN ({clause})
           AND ts > dateadd('d', -120, now())
         ORDER BY symbol, ts
     """
-    all_data = query(sql)
+    all_data = query(sql, params)
     if all_data.empty:
         logger.warning("compute_stock_signals_for_universe: no OHLCV data")
         return pd.DataFrame()
@@ -365,7 +366,7 @@ def _load_active_earnings(asof: date) -> dict[str, dict]:
     """Read earnings events from SQLite for any ticker still inside the PEAD window."""
     import sqlite3
     from contextlib import closing
-    from config.settings import SQLITE_PATH
+    from quantamental.config.settings import SQLITE_PATH
 
     cutoff = asof - pd.Timedelta(days=PEAD_DURATION_DAYS).to_pytimedelta()
     try:

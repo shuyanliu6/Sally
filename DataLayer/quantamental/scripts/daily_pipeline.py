@@ -15,14 +15,18 @@ import logging
 import os
 import sys
 import time
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
-# Allow running from repo root or scripts/ directory
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import pandas as pd
 
-from config.settings import PIPELINE_LOG_PATH, SQLITE_PATH
-from config.universe import (
+# Allow running from repo root or scripts/ directory
+if __package__ in (None, ""):
+    from _bootstrap import add_project_root
+    add_project_root(__file__)
+
+from quantamental.config.settings import PIPELINE_LOG_PATH, SQLITE_PATH
+from quantamental.config.universe import (
     load_candidate_list,
     load_research_universe,
     research_universe_source,
@@ -40,6 +44,8 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger("pipeline")
+
+MAX_MARKET_CATCHUP_DAYS = 10
 
 
 # ── State file (resume support) ────────────────────────────────────────────────
@@ -90,32 +96,101 @@ def with_retry(fn, step_name: str, max_retries: int = 3, delay: int = 5):
 
 # ── Step functions ─────────────────────────────────────────────────────────────
 
+def _latest_ohlcv_date() -> date | None:
+    """Return latest daily_ohlcv calendar date, or None if unavailable."""
+    try:
+        from quantamental.data.ingest.questdb_writer import query
+
+        df = query("SELECT max(ts) AS latest FROM daily_ohlcv")
+        if df.empty or "latest" not in df or df["latest"].isna().iloc[0]:
+            return None
+        return pd.Timestamp(df["latest"].iloc[0]).date()
+    except Exception as exc:
+        logger.warning("Could not read latest OHLCV date; fetching target only (%s)", exc)
+        return None
+
+
+def _trading_days_between(start: date, end: date) -> list[date]:
+    """NYSE trading days between start and end, inclusive."""
+    if start > end:
+        return []
+    try:
+        import pandas_market_calendars as mcal
+
+        nyse = mcal.get_calendar("XNYS")
+        valid = nyse.valid_days(start_date=start.isoformat(), end_date=end.isoformat())
+        return [d.date() for d in valid]
+    except Exception as exc:
+        logger.warning("NYSE calendar unavailable (%s); falling back to weekdays", exc)
+        return [
+            start + timedelta(days=n)
+            for n in range((end - start).days + 1)
+            if (start + timedelta(days=n)).weekday() < 5
+        ]
+
+
+def _market_fetch_dates(target: date) -> list[date]:
+    """Return missing market dates to fetch, capped for daily catch-up."""
+    latest = _latest_ohlcv_date()
+    if latest is None:
+        return [target]
+
+    start = latest + timedelta(days=1)
+    days = _trading_days_between(start, target)
+    if not days:
+        return []
+    if len(days) > MAX_MARKET_CATCHUP_DAYS:
+        logger.warning(
+            "OHLCV is %d trading days behind; fetching only the last %d days. "
+            "Run scripts/backfill.py for a deeper repair.",
+            len(days), MAX_MARKET_CATCHUP_DAYS,
+        )
+        days = days[-MAX_MARKET_CATCHUP_DAYS:]
+    return days
+
+
 def step_fetch_market() -> bool:
-    from data.ingest import polygon_client, questdb_writer
+    from quantamental.data.ingest import polygon_client, questdb_writer
     logger.info("STEP: fetch_market")
     target = polygon_client.prev_trading_day()
 
     # Use research universe if available, else fall back to candidate list.
     # Both are loaded dynamically — system adapts when user updates the JSON files.
     universe = load_research_universe()
+    fetch_dates = _market_fetch_dates(target)
+    if not fetch_dates:
+        logger.info("daily_ohlcv already current through %s", target)
+        return True
+
     logger.info(
-        "Fetching EOD data for %s (1 grouped API call, %d tickers, source: %s)",
-        target, len(universe), research_universe_source(),
+        "Fetching EOD data for %d date(s), %s → %s (%d tickers, source: %s)",
+        len(fetch_dates), fetch_dates[0], fetch_dates[-1], len(universe), research_universe_source(),
     )
 
-    df = polygon_client.fetch_grouped_daily(target_date=target, tickers=universe)
-    if df.empty:
-        logger.warning("No OHLCV data returned for %s", target)
+    total_rows = 0
+    failed_dates = []
+    for fetch_date in fetch_dates:
+        df = polygon_client.fetch_grouped_daily(target_date=fetch_date, tickers=universe)
+        if df.empty:
+            logger.warning("No OHLCV data returned for %s", fetch_date)
+            failed_dates.append(fetch_date.isoformat())
+            continue
+        df = polygon_client.validate_ohlcv(df)
+        questdb_writer.write_ohlcv(df)
+        total_rows += len(df)
+
+    if failed_dates:
+        logger.warning("fetch_market skipped unavailable date(s): %s", ", ".join(failed_dates))
+    if total_rows == 0:
+        logger.warning("fetch_market inserted no OHLCV rows")
         return False
-    df = polygon_client.validate_ohlcv(df)
-    questdb_writer.write_ohlcv(df)
-    logger.info("fetch_market complete: %d rows", len(df))
+    logger.info("fetch_market complete: %d rows across %d date(s)", total_rows, len(fetch_dates) - len(failed_dates))
     return True
 
 
 def step_fetch_macro() -> bool:
-    from data.ingest import fred_client, questdb_writer
-    from signals.macro import score_credit_spread, score_fed_balance, score_vix, score_yield
+    from quantamental.data.ingest import fred_client, questdb_writer
+    from quantamental.signals.macro import score_credit_spread, score_fed_balance, score_vix, score_yield
     from datetime import timedelta
 
     logger.info("STEP: fetch_macro")
@@ -156,8 +231,8 @@ def step_fetch_macro() -> bool:
 
 
 def step_calc_signals() -> bool:
-    from data.ingest import fred_client, questdb_writer
-    from signals.aggregator import run_and_store
+    from quantamental.data.ingest import fred_client, questdb_writer
+    from quantamental.signals.aggregator import run_and_store
     from datetime import timedelta
 
     logger.info("STEP: calc_signals")
@@ -185,7 +260,7 @@ def step_calc_sector_signals() -> bool:
     return 0 when no data is logged yet, so this step is safe to run before
     any manual data has been entered.
     """
-    from signals.sector import run_sector_signals
+    from quantamental.signals.sector import run_sector_signals
 
     logger.info("STEP: calc_sector_signals")
     row = run_sector_signals(persist=True)
@@ -205,7 +280,7 @@ def step_calc_stock_signals() -> bool:
     history (need ≥60 days for the slow EMA) score neutral. Cross events
     (golden/death) are written to signal_events automatically.
     """
-    from signals.stock import compute_stock_signals_for_universe
+    from quantamental.signals.stock import compute_stock_signals_for_universe
 
     logger.info("STEP: calc_stock_signals")
     candidates = load_candidate_list()
@@ -216,8 +291,8 @@ def step_calc_stock_signals() -> bool:
 
 
 def step_update_portfolio() -> bool:
-    from data.ingest.questdb_writer import query
-    from portfolio.tracker import compute_pnl, get_open_positions
+    from quantamental.data.ingest.questdb_writer import query
+    from quantamental.portfolio.tracker import compute_pnl, get_open_positions
 
     logger.info("STEP: update_portfolio")
     positions = get_open_positions(SQLITE_PATH)
@@ -238,9 +313,9 @@ def step_update_portfolio() -> bool:
 
 
 def step_check_stops() -> bool:
-    from data.ingest.questdb_writer import query
-    from portfolio.stoploss import check_stops, format_stop_alerts, send_telegram_alert
-    from portfolio.tracker import get_open_positions
+    from quantamental.data.ingest.questdb_writer import query
+    from quantamental.portfolio.stoploss import check_stops, format_stop_alerts, send_telegram_alert
+    from quantamental.portfolio.tracker import get_open_positions
 
     logger.info("STEP: check_stops")
     positions = get_open_positions(SQLITE_PATH)
@@ -280,7 +355,7 @@ def step_refresh_fundamentals() -> bool:
                     "(weekly cadence keeps Yahoo happy)")
         return True
 
-    from data.ingest.yfinance_fundamentals import backfill_fundamentals_yf
+    from quantamental.data.ingest.yfinance_fundamentals import backfill_fundamentals_yf
 
     candidates = load_candidate_list()
     logger.info("Refreshing fundamentals for %d candidates", len(candidates))
@@ -331,8 +406,8 @@ def run_pipeline(
     max_retries: int = 3,
     retry_delay: int = 5,
 ):
-    from data.ingest.questdb_writer import init_schema
-    from portfolio.tracker import init_db
+    from quantamental.data.ingest.questdb_writer import init_schema
+    from quantamental.portfolio.tracker import init_db
 
     logger.info("=== Pipeline started: step=%s force=%s at %s ===",
                 step, force, datetime.now(UTC).isoformat())
@@ -391,9 +466,7 @@ def run_pipeline(
     return len(failed) == 0
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser(description="Daily quantamental pipeline")
 
     group = parser.add_mutually_exclusive_group()
@@ -439,3 +512,9 @@ if __name__ == "__main__":
         retry_delay=args.retry_delay,
     )
     sys.exit(0 if success else 1)
+
+
+# ── Entry point ────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    main()

@@ -3,7 +3,7 @@ import logging
 import pandas as pd
 import requests
 
-from config.settings import (
+from quantamental.config.settings import (
     STOP_LOSS_ALERT_PCT,
     TELEGRAM_BOT_TOKEN,
     TELEGRAM_CHAT_ID,

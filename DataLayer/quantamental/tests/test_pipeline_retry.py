@@ -3,9 +3,7 @@ Unit tests for pipeline retry and resume logic.
 No network, no DB — mocks all step functions.
 """
 
-import sys, os, json, time
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
+import json, time
 import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
@@ -15,7 +13,7 @@ from pathlib import Path
 
 def _import_pipeline():
     import importlib
-    import scripts.daily_pipeline as p
+    import quantamental.scripts.daily_pipeline as p
     importlib.reload(p)   # fresh state each test
     return p
 
@@ -24,7 +22,7 @@ def _import_pipeline():
 
 class TestWithRetry:
     def test_succeeds_on_first_attempt(self):
-        from scripts.daily_pipeline import with_retry
+        from quantamental.scripts.daily_pipeline import with_retry
         calls = []
         def fn():
             calls.append(1)
@@ -34,7 +32,7 @@ class TestWithRetry:
         assert len(calls) == 1
 
     def test_retries_then_succeeds(self):
-        from scripts.daily_pipeline import with_retry
+        from quantamental.scripts.daily_pipeline import with_retry
         calls = []
         def fn():
             calls.append(1)
@@ -46,7 +44,7 @@ class TestWithRetry:
         assert len(calls) == 3
 
     def test_raises_after_max_retries(self):
-        from scripts.daily_pipeline import with_retry
+        from quantamental.scripts.daily_pipeline import with_retry
         calls = []
         def fn():
             calls.append(1)
@@ -56,11 +54,11 @@ class TestWithRetry:
         assert len(calls) == 3
 
     def test_exponential_delay(self):
-        from scripts.daily_pipeline import with_retry
+        from quantamental.scripts.daily_pipeline import with_retry
         slept = []
         def fn():
             raise ValueError("boom")
-        with patch("scripts.daily_pipeline.time.sleep", side_effect=lambda s: slept.append(s)):
+        with patch("quantamental.scripts.daily_pipeline.time.sleep", side_effect=lambda s: slept.append(s)):
             with pytest.raises(ValueError):
                 with_retry(fn, "test_step", max_retries=3, delay=5)
         # attempt 1 → sleep 5, attempt 2 → sleep 10, attempt 3 → raise (no sleep)
@@ -72,7 +70,7 @@ class TestWithRetry:
 class TestStateFile:
     def test_load_state_missing_returns_empty(self, tmp_path):
         p = _import_pipeline()
-        with patch("scripts.daily_pipeline._state_path", return_value=tmp_path / "state.json"):
+        with patch("quantamental.scripts.daily_pipeline._state_path", return_value=tmp_path / "state.json"):
             state = p._load_state()
         assert state == {"completed": [], "failed": []}
 
@@ -80,7 +78,7 @@ class TestStateFile:
         p = _import_pipeline()
         path = tmp_path / "state.json"
         path.write_text(json.dumps({"completed": ["fetch_market"], "failed": []}))
-        with patch("scripts.daily_pipeline._state_path", return_value=path):
+        with patch("quantamental.scripts.daily_pipeline._state_path", return_value=path):
             state = p._load_state(force=True)
         assert state["completed"] == []
 
@@ -88,7 +86,7 @@ class TestStateFile:
         p = _import_pipeline()
         path = tmp_path / "state.json"
         state = {"completed": ["fetch_market", "fetch_macro"], "failed": ["calc_signals"]}
-        with patch("scripts.daily_pipeline._state_path", return_value=path):
+        with patch("quantamental.scripts.daily_pipeline._state_path", return_value=path):
             p._save_state(state)
             loaded = p._load_state()
         assert loaded["completed"] == ["fetch_market", "fetch_macro"]
@@ -113,15 +111,15 @@ class TestRunPipeline:
     # init_schema and init_db are imported inside run_pipeline as local imports,
     # so we patch them at their source modules.
     _PATCHES = [
-        "data.ingest.questdb_writer.init_schema",
-        "portfolio.tracker.init_db",
+        "quantamental.data.ingest.questdb_writer.init_schema",
+        "quantamental.portfolio.tracker.init_db",
     ]
 
     def _run(self, p, tmp_path, mocks, step="all", force=False):
         path = tmp_path / "state.json"
         patches = [patch(t) for t in self._PATCHES]
-        with patch("scripts.daily_pipeline._state_path", return_value=path), \
-             patch("scripts.daily_pipeline.STEPS", mocks):
+        with patch("quantamental.scripts.daily_pipeline._state_path", return_value=path), \
+             patch("quantamental.scripts.daily_pipeline.STEPS", mocks):
             for pt in patches:
                 pt.start()
             try:

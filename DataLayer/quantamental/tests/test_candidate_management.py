@@ -3,10 +3,8 @@ Tests for the candidate list mechanism (load + manage_candidates CLI helpers).
 No DB, no network — all use temp paths.
 """
 
-import sys, os, json, importlib
+import json, importlib
 from pathlib import Path
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 
@@ -17,7 +15,7 @@ def isolated_config(tmp_path, monkeypatch):
     candidate_file = tmp_path / "candidate_list.json"
     research_file  = tmp_path / "research_tickers.json"
 
-    import config.universe as universe_mod
+    import quantamental.config.universe as universe_mod
 
     monkeypatch.setattr(universe_mod, "_CANDIDATE_FILE", candidate_file)
     monkeypatch.setattr(universe_mod, "_RESEARCH_FILE",  research_file)

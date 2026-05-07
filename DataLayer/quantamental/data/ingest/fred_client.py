@@ -4,8 +4,8 @@ from datetime import date, timedelta
 import pandas as pd
 from fredapi import Fred
 
-from config.settings import FRED_API_KEY
-from config.universe import FRED_SERIES
+from quantamental.config.settings import FRED_API_KEY
+from quantamental.config.universe import FRED_SERIES
 
 logger = logging.getLogger(__name__)
 

@@ -45,5 +45,8 @@ notebooks/research/*.ipynb
 # VS Code
 .vscode/
 
+# Editor swap files
+*.swp
+
 # QuestDB local data (if not using Docker volume)
 questdb_data/

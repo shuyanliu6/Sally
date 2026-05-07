@@ -3,12 +3,10 @@ Unit tests for portfolio tracker and trade journal.
 Uses a temp SQLite file — no QuestDB needed.
 """
 
-import sys, os, tempfile, pytest
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
+import tempfile, pytest
 import pandas as pd
-from portfolio.tracker import init_db, add_position, close_position, get_open_positions, compute_pnl
-from portfolio.journal import log_trade, get_recent, fill_30d_review, get_all
+from quantamental.portfolio.tracker import init_db, add_position, close_position, get_open_positions, compute_pnl
+from quantamental.portfolio.journal import log_trade, get_recent, fill_30d_review, get_all
 
 
 @pytest.fixture

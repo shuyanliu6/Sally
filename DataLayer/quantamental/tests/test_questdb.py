@@ -6,9 +6,7 @@ Run with:  pytest tests/test_questdb.py -v
 Skip with: pytest tests/ --ignore=tests/test_questdb.py
 """
 
-import sys, os, time
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
+import time
 import pytest
 import pandas as pd
 from datetime import datetime, timezone
@@ -17,7 +15,7 @@ from datetime import datetime, timezone
 # Skip entire module if QuestDB is unreachable
 def _questdb_available():
     try:
-        from data.ingest.questdb_writer import get_connection
+        from quantamental.data.ingest.questdb_writer import get_connection
         conn = get_connection()
         conn.close()
         return True
@@ -32,7 +30,7 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture(scope="module")
 def writer():
-    from data.ingest import questdb_writer
+    from quantamental.data.ingest import questdb_writer
     questdb_writer.init_schema()
     return questdb_writer
 
@@ -113,7 +111,7 @@ class TestIncrementalWrites:
 
         # Snapshot the count after first write
         n1 = int(writer.query(
-            f"SELECT count() AS n FROM macro_indicators WHERE indicator = '{indicator}'"
+            "SELECT count() AS n FROM macro_indicators WHERE indicator = :indicator", {"indicator": indicator}
         )["n"].iloc[0])
         assert n1 >= 1
 
@@ -122,7 +120,7 @@ class TestIncrementalWrites:
         time.sleep(1.5)
 
         n2 = int(writer.query(
-            f"SELECT count() AS n FROM macro_indicators WHERE indicator = '{indicator}'"
+            "SELECT count() AS n FROM macro_indicators WHERE indicator = :indicator", {"indicator": indicator}
         )["n"].iloc[0])
         assert n2 == n1, f"write_macro duplicated: was {n1}, now {n2}"
 
@@ -151,7 +149,7 @@ class TestIncrementalWrites:
         time.sleep(1.5)
 
         n = int(writer.query(
-            f"SELECT count() AS n FROM macro_indicators WHERE indicator = '{indicator}'"
+            "SELECT count() AS n FROM macro_indicators WHERE indicator = :indicator", {"indicator": indicator}
         )["n"].iloc[0])
         assert n == 3, f"expected 3 distinct rows after incremental write, got {n}"
 

@@ -3,16 +3,13 @@ Unit tests for per-stock signals (Month 2 §4).
 No DB, no network — synthetic series only.
 """
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 from datetime import date
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from signals.stock import (
+from quantamental.signals.stock import (
     EMA_FAST,
     EMA_SLOW,
     PEAD_DURATION_DAYS,

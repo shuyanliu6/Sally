@@ -3,22 +3,18 @@ Unit tests for macro signal scorers.
 No network calls, no database — all synthetic DataFrames.
 """
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import numpy as np
 import pandas as pd
 import pytest
 
-from signals.macro import (
+from quantamental.signals.macro import (
     score_credit_spread,
     score_fed_balance,
     score_vix,
     score_yield,
     compute_all_signals,
 )
-from signals.aggregator import (
+from quantamental.signals.aggregator import (
     adjusted_rsi_score,
     classify_regime,
     compute_confirmed_regime,

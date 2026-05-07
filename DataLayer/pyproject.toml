@@ -38,21 +38,27 @@ dev = [
     "pytest>=7.4",
 ]
 
+[project.scripts]
+quantamental-pipeline = "quantamental.scripts.daily_pipeline:main"
+quantamental-check-data = "quantamental.scripts.check_data:main"
+quantamental-build-universe = "quantamental.scripts.build_universe:main"
+quantamental-manage-candidates = "quantamental.scripts.manage_candidates:main"
+quantamental-run-alpha = "quantamental.scripts.run_alpha:main"
+quantamental-backtest-alpha = "quantamental.scripts.backtest_alpha:main"
+quantamental-alpha-performance = "quantamental.scripts.alpha_performance:main"
+
 [tool.setuptools.packages.find]
-where = ["quantamental"]
+where = ["."]
 include = [
-    "config*",
-    "dashboard*",
-    "data*",
-    "portfolio*",
-    "research*",
-    "scripts*",
-    "signals*",
+    "quantamental*",
 ]
+
+[tool.setuptools.package-data]
+"quantamental.config" = ["*.yaml", ".env.example"]
 
 [tool.pytest.ini_options]
 testpaths = ["quantamental/tests"]
-pythonpath = ["quantamental"]
+pythonpath = ["."]
 addopts = "-ra"
 
 [tool.ruff]

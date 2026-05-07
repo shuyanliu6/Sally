@@ -110,16 +110,19 @@ def compute_sox_spx_from_db(
 
     Reads `lookback_days` of recent OHLCV data — enough for the 60-day EMA.
     """
-    from data.ingest.questdb_writer import query
+    from quantamental.data.ingest.questdb_writer import query, symbol_list_clause
+
+    lookback = max(1, int(lookback_days) * 2)
+    clause, params = symbol_list_clause([semi_proxy, broad_proxy])
 
     sql = f"""
         SELECT symbol, ts, close
         FROM daily_ohlcv
-        WHERE symbol IN ('{semi_proxy}', '{broad_proxy}')
-          AND ts > dateadd('d', -{lookback_days * 2}, now())
+        WHERE symbol IN ({clause})
+          AND ts > dateadd('d', -{lookback}, now())
         ORDER BY ts
     """
-    df = query(sql)
+    df = query(sql, params)
     if df.empty:
         logger.warning("compute_sox_spx_from_db: no data found")
         return {"ratio": 0.0, "ema_fast": 0.0, "ema_slow": 0.0, "signal": 0}
@@ -153,7 +156,7 @@ def compute_sector_composite(
     max_possible so the composite range is preserved regardless of how many
     signals are active.
     """
-    from signals import registry as _reg
+    from quantamental.signals import registry as _reg
 
     _COMPONENTS = {
         "sox_spx":        sox_spx_signal,
@@ -183,7 +186,7 @@ def run_sector_signals(persist: bool = True) -> dict:
     Persistence is OFF by default for unit-testing convenience; the daily
     pipeline calls with persist=True.
     """
-    from signals.sector_ai_infra import (
+    from quantamental.signals.sector_ai_infra import (
         latest_tsmc_signal,
         latest_capex_signal,
         latest_api_pricing_signal,
@@ -216,7 +219,7 @@ def run_sector_signals(persist: bool = True) -> dict:
     )
 
     if persist:
-        from data.ingest.questdb_writer import write_sector_signals
+        from quantamental.data.ingest.questdb_writer import write_sector_signals
         write_sector_signals(row)
 
     return row

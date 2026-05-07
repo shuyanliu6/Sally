@@ -42,4 +42,5 @@ DataLayer/quantamental/config/candidate_list.json
 .DS_Store
 .vscode/
 .idea/
+*.swp
 .claude/settings.local.json

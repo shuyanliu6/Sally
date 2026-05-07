@@ -7,7 +7,7 @@ macro.py, sector.py, stock.py, and aggregator.py call this module before
 computing each signal.
 
 Usage:
-    from signals import registry
+    from quantamental.signals import registry
 
     if registry.is_enabled("macro", "vix"):
         v_signal = score_vix(latest_vix)

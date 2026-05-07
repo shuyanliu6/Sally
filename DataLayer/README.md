@@ -46,11 +46,21 @@ docker compose up -d
 
 ## Daily Commands
 
+The familiar operator commands still work from `DataLayer/quantamental`.
+Editable installs also expose package entry points from `DataLayer`.
+
 Run the full pipeline:
 
 ```bash
 cd /Users/shuyan/Desktop/nothing/Sally/DataLayer/quantamental
 python scripts/daily_pipeline.py --step all
+```
+
+Hardened package-style equivalent:
+
+```bash
+cd /Users/shuyan/Desktop/nothing/Sally/DataLayer
+quantamental-pipeline --step all
 ```
 
 Open the dashboard:
@@ -67,6 +77,58 @@ cd /Users/shuyan/Desktop/nothing/Sally/DataLayer
 python -m pytest
 ```
 
+Other package entry points:
+
+```bash
+quantamental-check-data --days 60
+quantamental-build-universe --stage static
+quantamental-manage-candidates --show
+```
+
+## Alpha Engine
+
+Run the V1 long-only alpha ranker for the AI-infra candidate universe:
+
+```bash
+cd /Users/shuyan/Desktop/nothing/Sally/DataLayer/quantamental
+python scripts/run_alpha.py --asof 2026-04-29
+```
+
+By default this saves Parquet/CSV ranking artifacts under `data/parquet/alpha/`
+for review and dashboard display. It does not mutate QuestDB unless explicitly
+requested:
+
+```bash
+python scripts/run_alpha.py --asof 2026-04-29 --persist-db
+```
+
+Backtest the ranker against `SPY`, `QQQ`, `SMH`, and an equal-weight candidate
+basket:
+
+```bash
+python scripts/backtest_alpha.py --start 2025-01-01 --end 2026-04-01
+```
+
+Editable installs also expose:
+
+```bash
+quantamental-run-alpha --asof 2026-04-29
+quantamental-backtest-alpha --start 2025-01-01 --end 2026-04-01
+```
+
+Generate the fund-manager style forward-performance report:
+
+```bash
+python scripts/alpha_performance.py --start 2025-01-01 --end 2026-04-01
+```
+
+This report tracks whether `TOP_BUY` and `BUY` buckets actually beat `SMH`
+and the equal-weight candidate basket over 20/40 trading-day horizons. Saved
+reports live under `data/parquet/alpha/performance/`.
+
+Treat the ranker as decision-support until a walk-forward backtest shows that
+the signal improves forward returns versus the baselines.
+
 ## Hardening Notes
 
 Before treating this as production infrastructure:
@@ -75,4 +137,4 @@ Before treating this as production infrastructure:
 - Keep databases, logs, caches, and local notebooks out of version control.
 - Prefer adding tests around every signal rule before changing thresholds.
 - Split large modules once they become painful to review, especially
-  `dashboard/app.py` and `data/ingest/questdb_writer.py`.
+  the dashboard panel layer and QuestDB read/write/schema modules.

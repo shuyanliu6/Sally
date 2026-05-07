@@ -22,11 +22,11 @@ from typing import Iterator
 import pandas as pd
 from polygon import RESTClient
 
-from config.settings import (
+from quantamental.config.settings import (
     POLYGON_API_KEY,
     POLYGON_RATE_LIMIT_BACKOFF,
 )
-from data.ingest.polygon_client import _is_rate_limit_error, _limiter
+from quantamental.data.ingest.polygon_client import _is_rate_limit_error, _limiter
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ def backfill_fundamentals(
 
     Returns: dict with summary stats.
     """
-    from data.ingest.questdb_writer import query, write_fundamentals
+    from quantamental.data.ingest.questdb_writer import query, write_fundamentals
 
     # Find which tickers already have data
     skip_tickers: set[str] = set()

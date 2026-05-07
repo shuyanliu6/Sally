@@ -22,7 +22,9 @@ import logging
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+if __package__ in (None, ""):
+    from _bootstrap import add_project_root
+    add_project_root(__file__)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,14 +35,14 @@ logger = logging.getLogger("build_universe")
 
 
 def cmd_static():
-    from research.universe_builder import build_static_universe
+    from quantamental.research.universe_builder import build_static_universe
     payload = build_static_universe()
     print(f"\n✅ Static universe written: {payload['ticker_count']} tickers")
     print(f"   Drops: {payload['stats']['drops']}")
 
 
 def cmd_refine(price_floor: float, addv_min: float, min_history: int):
-    from research.universe_builder import refine_universe_with_liquidity
+    from quantamental.research.universe_builder import refine_universe_with_liquidity
     payload = refine_universe_with_liquidity(
         price_floor=price_floor,
         addv_min=addv_min,
@@ -51,7 +53,7 @@ def cmd_refine(price_floor: float, addv_min: float, min_history: int):
 
 
 def cmd_apply_schema_migration():
-    from data.ingest.questdb_writer import recreate_ohlcv_table
+    from quantamental.data.ingest.questdb_writer import recreate_ohlcv_table
 
     print("\n⚠️  This will DROP the daily_ohlcv table and all its data.")
     print("   You will need to backfill afterwards: python scripts/backfill.py")

@@ -3,13 +3,10 @@ Tests for holiday-aware prev_trading_day (D2 fix).
 No network, no DB.
 """
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import pytest
 from datetime import date
 
-from data.ingest.polygon_client import prev_trading_day
+from quantamental.data.ingest.polygon_client import prev_trading_day
 
 
 # Skip the whole module if pandas_market_calendars isn't installed —

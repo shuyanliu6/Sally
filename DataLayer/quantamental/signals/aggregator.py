@@ -1,7 +1,7 @@
 import logging
 from datetime import UTC, datetime
 
-from config.settings import (
+from quantamental.config.settings import (
     REGIME_LABELS,
     REGIME_MODERATE_OFF_MIN,
     REGIME_MODERATE_ON_MIN,
@@ -74,7 +74,7 @@ def run_and_store(
     writer: questdb_writer module (injected to avoid circular imports).
     Returns the full signal row dict including confirmed_regime per D5.
     """
-    from signals.macro import compute_all_signals
+    from quantamental.signals.macro import compute_all_signals
 
     signals = compute_all_signals(yield_df, vix_df, fed_df, credit_df)
     today_regime = classify_regime(signals["composite_score"])
@@ -125,7 +125,7 @@ def run_and_store(
 
 def _layer_weights() -> tuple[float, float, float]:
     """Return (macro, sector, stock) layer weights from the registry."""
-    from signals import registry as _reg
+    from quantamental.signals import registry as _reg
     return (
         _reg.layer_weight("macro"),
         _reg.layer_weight("sector"),
@@ -250,7 +250,7 @@ def run_composite(
     )
 
     if persist:
-        from data.ingest.questdb_writer import write_composite_signal
+        from quantamental.data.ingest.questdb_writer import write_composite_signal
         write_composite_signal(row)
 
     return row

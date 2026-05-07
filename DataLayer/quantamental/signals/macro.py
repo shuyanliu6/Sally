@@ -10,7 +10,7 @@ import logging
 import numpy as np
 import pandas as pd
 
-from config.settings import (
+from quantamental.config.settings import (
     CREDIT_FAST_MA,
     CREDIT_SLOW_MA,
     CREDIT_STRONG_BEAR_OAS,
@@ -141,7 +141,7 @@ def compute_all_signals(
     the range — a system running 2 signals still produces a composite in
     [-8, +8] (not [-4, +4]).
     """
-    from signals import registry as _reg
+    from quantamental.signals import registry as _reg
 
     latest_vix = float(vix_df["value"].dropna().iloc[-1]) if not vix_df.empty else 20.0
 

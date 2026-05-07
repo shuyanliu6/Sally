@@ -15,10 +15,12 @@ import os
 import sqlite3
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+if __package__ in (None, ""):
+    from _bootstrap import add_project_root
+    add_project_root(__file__)
 
-from config.settings import SQLITE_PATH
-from signals.sector_ai_infra import add_tsmc_revenue, init_ai_infra_db
+from quantamental.config.settings import SQLITE_PATH
+from quantamental.signals.sector_ai_infra import add_tsmc_revenue, init_ai_infra_db
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 

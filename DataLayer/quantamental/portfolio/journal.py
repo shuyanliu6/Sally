@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-from config.settings import SQLITE_PATH
+from quantamental.config.settings import SQLITE_PATH
 
 logger = logging.getLogger(__name__)
 

@@ -27,9 +27,11 @@ import os
 import sys
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+if __package__ in (None, ""):
+    from _bootstrap import add_project_root
+    add_project_root(__file__)
 
-from config.universe import (
+from quantamental.config.universe import (
     BASE_CANDIDATES,
     BASE_CANDIDATE_TICKERS,
     UNCATEGORIZED_SECTOR,

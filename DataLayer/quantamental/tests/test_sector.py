@@ -3,20 +3,17 @@ Unit tests for sector signals (Month 2 §3).
 No DB, no network — synthetic series only.
 """
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import pandas as pd
 import pytest
 import numpy as np
 
-from signals.sector import (
+from quantamental.signals.sector import (
     calc_sox_spx_signal,
     compute_sector_composite,
     EMA_FAST,
     EMA_SLOW,
 )
-from signals.sector_ai_infra import (
+from quantamental.signals.sector_ai_infra import (
     _score_tsmc,
     _shift_month,
     add_tsmc_revenue,

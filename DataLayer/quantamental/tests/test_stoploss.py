@@ -2,12 +2,9 @@
 Unit tests for stop-loss checker. No DB, no network.
 """
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import pandas as pd
 import pytest
-from portfolio.stoploss import check_stops, format_stop_alerts
+from quantamental.portfolio.stoploss import check_stops, format_stop_alerts
 
 
 def make_positions(rows):

@@ -19,10 +19,12 @@ import os
 import sqlite3
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+if __package__ in (None, ""):
+    from _bootstrap import add_project_root
+    add_project_root(__file__)
 
-from config.settings import SQLITE_PATH
-from signals.sector_ai_infra import (
+from quantamental.config.settings import SQLITE_PATH
+from quantamental.signals.sector_ai_infra import (
     add_api_pricing,
     init_ai_infra_db,
     latest_api_pricing_signal,

@@ -249,7 +249,7 @@ def backfill_fundamentals_yf(
 
     Returns: summary dict.
     """
-    from data.ingest.questdb_writer import query, write_fundamentals
+    from quantamental.data.ingest.questdb_writer import query, write_fundamentals
 
     tickers = [t.upper() for t in tickers]
     skip_set: set[str] = set()

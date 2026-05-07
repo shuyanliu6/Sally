@@ -15,9 +15,11 @@ Prints a colour-coded report for:
 import os, sys
 from datetime import date, timedelta
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+if __package__ in (None, ""):
+    from _bootstrap import add_project_root
+    add_project_root(__file__)
 
-from config.universe import ALL_TICKERS, FRED_SERIES, TICKER_METADATA
+from quantamental.config.universe import ALL_TICKERS, FRED_SERIES, TICKER_METADATA
 
 # ── ANSI colours ──────────────────────────────────────────────────────────────
 GREEN  = "\033[92m"
@@ -56,7 +58,7 @@ def trading_days_in_range(start: date, end: date) -> int:
 
 def get_writer():
     try:
-        from data.ingest import questdb_writer
+        from quantamental.data.ingest import questdb_writer
         questdb_writer.query("SELECT 1")
         return questdb_writer
     except Exception as e:
@@ -75,7 +77,7 @@ def check_ohlcv(writer, lookback_days: int):
     expected_days = trading_days_in_range(start_date, end_date)
     expected_days = min(expected_days, lookback_days)
 
-    summary = writer.query(f"""
+    summary = writer.query("""
         SELECT
             symbol,
             count()            AS rows,
@@ -84,9 +86,9 @@ def check_ohlcv(writer, lookback_days: int):
             last(close)        AS latest_close,
             sum(CASE WHEN close IS NULL OR close <= 0 THEN 1 ELSE 0 END) AS bad_rows
         FROM daily_ohlcv
-        WHERE ts >= '{start_date}'
+        WHERE ts >= :start_date
         ORDER BY symbol
-    """)
+    """, {"start_date": str(start_date)})
 
     found_symbols = set(summary["symbol"].tolist()) if not summary.empty else set()
     missing = [t for t in ALL_TICKERS if t not in found_symbols]
@@ -155,11 +157,11 @@ def check_macro(writer):
 
     for name in FRED_SERIES:
         try:
-            df = writer.query(f"""
+            df = writer.query("""
                 SELECT count() AS rows, max(ts)::date AS latest_date, last(value) AS latest_val
                 FROM macro_indicators
-                WHERE indicator = '{name}'
-            """)
+                WHERE indicator = :indicator
+            """, {"indicator": name})
         except Exception as e:
             print(f"{name:<20}  {fail(str(e))}")
             issues.append(f"macro_query_error:{name}")
@@ -267,9 +269,9 @@ def check_portfolio():
     print(header("━━━ 4. Portfolio State (SQLite) ━━━"))
     issues = []
     try:
-        from portfolio.tracker import get_open_positions
-        from portfolio.journal import get_recent
-        from config.settings import SQLITE_PATH
+        from quantamental.portfolio.tracker import get_open_positions
+        from quantamental.portfolio.journal import get_recent
+        from quantamental.config.settings import SQLITE_PATH
 
         positions = get_open_positions(SQLITE_PATH)
         journal   = get_recent(n=5, path=SQLITE_PATH)

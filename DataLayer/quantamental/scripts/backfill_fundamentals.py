@@ -27,9 +27,11 @@ import logging
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+if __package__ in (None, ""):
+    from _bootstrap import add_project_root
+    add_project_root(__file__)
 
-from config.universe import (
+from quantamental.config.universe import (
     load_candidate_list,
     load_research_universe,
 )
@@ -104,7 +106,7 @@ def main():
     args = p.parse_args()
 
     # Initialize schemas
-    from data.ingest.questdb_writer import init_schema
+    from quantamental.data.ingest.questdb_writer import init_schema
     init_schema()
 
     # Determine universe — candidate list is the default (fundamentals are only
@@ -123,7 +125,7 @@ def main():
 
     # Dispatch by source
     if args.source == "yfinance":
-        from data.ingest.yfinance_fundamentals import backfill_fundamentals_yf
+        from quantamental.data.ingest.yfinance_fundamentals import backfill_fundamentals_yf
 
         # For full-universe runs, auto-enable a batch pause to dodge Yahoo throttling
         # unless the user explicitly set it via --batch-pause.
@@ -145,8 +147,8 @@ def main():
 
     elif args.source == "polygon":
         if args.income_only:
-            from data.ingest.polygon_fundamentals import fetch_income_statements
-            from data.ingest.questdb_writer import write_fundamentals, query
+            from quantamental.data.ingest.polygon_fundamentals import fetch_income_statements
+            from quantamental.data.ingest.questdb_writer import write_fundamentals, query
 
             skip_set = set()
             if not args.no_skip_existing:
@@ -174,7 +176,7 @@ def main():
                     logger.info("[%d/%d] fetched=%d failed=%d", i, len(to_fetch), fetched, failed)
             logger.info("Done: fetched=%d failed=%d", fetched, failed)
         else:
-            from data.ingest.polygon_fundamentals import backfill_fundamentals
+            from quantamental.data.ingest.polygon_fundamentals import backfill_fundamentals
             backfill_fundamentals(
                 tickers,
                 quarters=8,

@@ -7,7 +7,7 @@ import pandas as pd
 from polygon import RESTClient
 from polygon.rest.models import Agg
 
-from config.settings import (
+from quantamental.config.settings import (
     POLYGON_API_KEY,
     POLYGON_RATE_LIMIT_BACKOFF,
     POLYGON_REQUESTS_PER_MINUTE,

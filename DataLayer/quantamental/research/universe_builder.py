@@ -151,8 +151,8 @@ def fetch_polygon_ticker_metadata(tickers: list[str]) -> pd.DataFrame:
     Returns DataFrame with columns: symbol, polygon_type, polygon_active.
     """
     from polygon import RESTClient
-    from config.settings import POLYGON_API_KEY
-    from data.ingest.polygon_client import _limiter
+    from quantamental.config.settings import POLYGON_API_KEY
+    from quantamental.data.ingest.polygon_client import _limiter
 
     client = RESTClient(api_key=POLYGON_API_KEY)
     requested = set(tickers)
@@ -267,8 +267,8 @@ def apply_liquidity_filters(
 
     Returns (kept_tickers, stats_dict).
     """
-    from data.ingest.questdb_writer import query
-    from config.universe import BASE_CANDIDATE_TICKERS, load_candidate_list
+    from quantamental.data.ingest.questdb_writer import query, symbol_list_clause
+    from quantamental.config.universe import BASE_CANDIDATE_TICKERS, load_candidate_list
 
     if not tickers:
         return [], {"reason": "no_input_tickers"}
@@ -276,9 +276,7 @@ def apply_liquidity_filters(
     # Whitelist: never drop tickers in the active candidate list or BASE seed
     whitelist = {t.upper() for t in BASE_CANDIDATE_TICKERS} | {t.upper() for t in load_candidate_list()}
 
-    # Build a SQL IN list (escape any quotes — symbols are alphanumeric, but be safe)
-    safe_tickers = [t.replace("'", "''") for t in tickers]
-    in_list = ", ".join(f"'{t}'" for t in safe_tickers)
+    in_list, params = symbol_list_clause(tickers)
 
     sql = f"""
         SELECT
@@ -290,7 +288,7 @@ def apply_liquidity_filters(
         WHERE symbol IN ({in_list})
         GROUP BY symbol
     """
-    summary = query(sql)
+    summary = query(sql, params)
 
     if summary.empty:
         logger.warning("No OHLCV data found for any of the %d input tickers", len(tickers))
@@ -303,11 +301,11 @@ def apply_liquidity_filters(
             avg(close * volume) AS addv_recent
         FROM daily_ohlcv
         WHERE symbol IN ({in_list})
-          AND ts > dateadd('d', -{lookback_days * 2}, now())
+          AND ts > dateadd('d', -{max(1, int(lookback_days) * 2)}, now())
         GROUP BY symbol
     """
     try:
-        recent = query(recent_sql)
+        recent = query(recent_sql, params)
         summary = summary.merge(recent, on="symbol", how="left")
     except Exception as exc:
         logger.warning("Recent ADDV query failed (%s) — falling back to full ADDV", exc)
@@ -391,7 +389,7 @@ def build_static_universe(use_polygon: bool = False) -> dict:
 
     # Union with BASE_CANDIDATES so ETFs (SPY/QQQ/SMH/EWY) and foreign ADRs
     # (TSM/ASML) are always included in the research universe.
-    from config.universe import BASE_CANDIDATE_TICKERS
+    from quantamental.config.universe import BASE_CANDIDATE_TICKERS
     base_set = {t.upper() for t in BASE_CANDIDATE_TICKERS}
     forced_in = sorted(base_set - sp1500_filtered)
 

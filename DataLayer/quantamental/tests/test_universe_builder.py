@@ -3,13 +3,10 @@ Unit tests for the research universe builder.
 No network — fixtures simulate Wikipedia + Polygon results.
 """
 
-import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
 import pandas as pd
 import pytest
 
-from research.universe_builder import (
+from quantamental.research.universe_builder import (
     apply_static_filters,
     EXCLUDE_SECTORS,
     EXCLUDE_POLYGON_TYPES,

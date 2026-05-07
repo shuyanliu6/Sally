@@ -25,9 +25,11 @@ import os
 import sys
 from datetime import date, timedelta
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+if __package__ in (None, ""):
+    from _bootstrap import add_project_root
+    add_project_root(__file__)
 
-from config.universe import (
+from quantamental.config.universe import (
     BASE_CANDIDATE_TICKERS,
     load_candidate_list,
     load_research_universe,
@@ -57,7 +59,7 @@ def backfill_ohlcv_per_ticker(tickers: list[str], start: date, end: date):
 
     Fast for small universes (< PER_TICKER_THRESHOLD).
     """
-    from data.ingest import polygon_client, questdb_writer
+    from quantamental.data.ingest import polygon_client, questdb_writer
 
     logger.info("Per-ticker strategy: %d tickers × 1 call each", len(tickers))
 
@@ -88,7 +90,7 @@ def backfill_ohlcv_per_date(tickers: list[str], start: date, end: date):
     using pandas_market_calendars when available — saves ~20 wasted API calls
     per year of backfill on the free tier.
     """
-    from data.ingest import polygon_client, questdb_writer
+    from quantamental.data.ingest import polygon_client, questdb_writer
 
     # Build set of valid NYSE trading days in the window. Falls back to
     # weekday-only filtering if pandas_market_calendars is unavailable.
@@ -138,11 +140,12 @@ def backfill_ohlcv_per_date(tickers: list[str], start: date, end: date):
 def _existing_pairs(start: date, end: date, writer) -> set:
     try:
         existing_df = writer.query(
-            f"""
+            """
             SELECT symbol, ts::date AS d
             FROM daily_ohlcv
-            WHERE ts >= '{start}' AND ts <= '{end}'
-            """
+            WHERE ts >= :start AND ts <= :end
+            """,
+            {"start": str(start), "end": str(end)},
         )
         return set(zip(existing_df["symbol"], existing_df["d"].astype(str)))
     except Exception as exc:
@@ -192,8 +195,8 @@ def _nyse_trading_days(start: date, end: date) -> set[date]:
 # ── Macro backfill (unchanged in spirit) ──────────────────────────────────────
 
 def backfill_macro(start: date, end: date):
-    from data.ingest import fred_client, questdb_writer
-    from signals.macro import (
+    from quantamental.data.ingest import fred_client, questdb_writer
+    from quantamental.signals.macro import (
         score_credit_spread, score_fed_balance, score_vix, score_yield,
     )
 
@@ -268,8 +271,8 @@ def main():
     end   = date.fromisoformat(args.end)
 
     # Initialise schemas
-    from data.ingest.questdb_writer import init_schema
-    from portfolio.tracker import init_db
+    from quantamental.data.ingest.questdb_writer import init_schema
+    from quantamental.portfolio.tracker import init_db
     init_schema()
     init_db()
 

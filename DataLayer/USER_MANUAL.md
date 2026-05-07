@@ -98,6 +98,14 @@ cd /Users/shuyan/Desktop/nothing/Sally/DataLayer/quantamental
 python scripts/daily_pipeline.py --step all
 ```
 
+If you installed the project with `pip install -e ".[dev]"`, the package-style
+equivalent is:
+
+```bash
+cd /Users/shuyan/Desktop/nothing/Sally/DataLayer
+quantamental-pipeline --step all
+```
+
 This runs **5 sequential steps** (after market close at 4 PM ET, ideally 5 PM ET to allow Polygon settlement):
 
 | Step               | What it does                                                           | Time   |
@@ -169,6 +177,12 @@ Browser opens automatically at <http://localhost:8501>. Auto-refreshes every 60 
 ```bash
 python scripts/check_data.py            # last 20 trading days
 python scripts/check_data.py --days 60  # deeper look
+```
+
+Package-style equivalent:
+
+```bash
+quantamental-check-data --days 60
 ```
 
 Exit code `0` = healthy, `1` = issues found.
