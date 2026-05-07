@@ -102,3 +102,29 @@ def load_latest_alpha_performance() -> dict[str, pd.DataFrame]:
     except Exception as exc:
         st.warning(f"Alpha performance unavailable: {exc}")
         return {"headline": pd.DataFrame(), "bucket_summary": pd.DataFrame()}
+
+
+@st.cache_data(ttl=60)
+def load_data_freshness() -> dict:
+    try:
+        from quantamental.alpha.reporting import load_latest_alpha_ranks as _load_ranks
+        from quantamental.dashboard.freshness import build_freshness_report
+
+        return build_freshness_report(alpha_ranks=_load_ranks())
+    except Exception as exc:
+        st.warning(f"Data freshness unavailable: {exc}")
+        return {
+            "status": "BLOCKED",
+            "trusted": False,
+            "checks": [
+                {
+                    "component": "Freshness",
+                    "status": "FAIL",
+                    "latest_date": None,
+                    "expected_date": None,
+                    "lag_days": None,
+                    "detail": str(exc),
+                    "fix": "docker compose up -d",
+                }
+            ],
+        }

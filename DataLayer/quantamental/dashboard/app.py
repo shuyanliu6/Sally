@@ -16,6 +16,7 @@ except ImportError:
 
 from quantamental.config.settings import DASHBOARD_REFRESH_SECONDS, SQLITE_PATH
 from quantamental.dashboard.data import (
+    load_data_freshness,
     load_latest_alpha_performance,
     load_latest_alpha_ranks,
     load_latest_prices,
@@ -33,6 +34,7 @@ from quantamental.dashboard.panels import (
     render_panel_h_alpha,
     render_panel_i_alpha_validation,
     render_portfolio_risk,
+    render_data_freshness_gate,
     render_overview,
 )
 from quantamental.dashboard.ui import apply_global_styles
@@ -64,6 +66,7 @@ def main():
     sector_df = load_sector_signals(days=90)
     alpha_ranks = load_latest_alpha_ranks()
     alpha_performance = load_latest_alpha_performance()
+    freshness = load_data_freshness()
     latest_prices = load_latest_prices()
     positions_df = get_open_positions(SQLITE_PATH)
 
@@ -72,9 +75,10 @@ def main():
     )
 
     with overview_tab:
-        render_overview(signals_df, sector_df, alpha_ranks, positions_df, latest_prices)
+        render_overview(signals_df, sector_df, alpha_ranks, positions_df, latest_prices, freshness)
 
     with alpha_tab:
+        render_data_freshness_gate(freshness)
         render_panel_h_alpha(alpha_ranks)
         render_panel_i_alpha_validation(alpha_performance)
 

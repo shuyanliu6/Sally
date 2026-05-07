@@ -149,28 +149,82 @@ def _market_fetch_dates(target: date) -> list[date]:
     return days
 
 
+def _active_market_universe() -> tuple[list[str], list[str], str]:
+    """Return tickers to fetch, active candidates, and a source label.
+
+    The research universe powers broad storage, but active candidates can include
+    ETFs, ADRs, or REITs that the research-universe filters intentionally remove.
+    Fetch the union so dashboard ranks never go stale for tradeable candidates.
+    """
+    research = load_research_universe()
+    candidates = load_candidate_list()
+    universe = sorted(set(research) | set(candidates))
+    source = f"{research_universe_source()} + candidate_list"
+    return universe, candidates, source
+
+
+def _missing_ohlcv_symbols(target: date, symbols: list[str]) -> list[str]:
+    """Return active symbols missing an OHLCV row for target date."""
+    if not symbols:
+        return []
+    try:
+        from quantamental.data.ingest.questdb_connection import symbol_list_clause
+        from quantamental.data.ingest.questdb_writer import query
+
+        clause, params = symbol_list_clause(symbols)
+        params = {
+            **params,
+            "start": target.isoformat(),
+            "end": (target + timedelta(days=1)).isoformat(),
+        }
+        df = query(
+            f"""
+            SELECT symbol
+            FROM daily_ohlcv
+            WHERE symbol IN ({clause}) AND ts >= :start AND ts < :end
+            """,
+            params,
+        )
+        found = set(df["symbol"].astype(str)) if not df.empty else set()
+        return [symbol for symbol in symbols if symbol not in found]
+    except Exception as exc:
+        logger.warning("Could not check target OHLCV coverage for %s (%s)", target, exc)
+        return []
+
+
 def step_fetch_market() -> bool:
     from quantamental.data.ingest import polygon_client, questdb_writer
     logger.info("STEP: fetch_market")
     target = polygon_client.prev_trading_day()
 
-    # Use research universe if available, else fall back to candidate list.
-    # Both are loaded dynamically — system adapts when user updates the JSON files.
-    universe = load_research_universe()
+    universe, active_candidates, universe_source = _active_market_universe()
     fetch_dates = _market_fetch_dates(target)
+    per_date_tickers: dict[date, list[str]] = {fetch_date: universe for fetch_date in fetch_dates}
+
     if not fetch_dates:
-        logger.info("daily_ohlcv already current through %s", target)
-        return True
+        missing_active = _missing_ohlcv_symbols(target, active_candidates)
+        if not missing_active:
+            logger.info("daily_ohlcv already current through %s", target)
+            return True
+        logger.warning(
+            "daily_ohlcv is current by max date, but %d active candidates are missing %s: %s",
+            len(missing_active),
+            target,
+            ", ".join(missing_active),
+        )
+        fetch_dates = [target]
+        per_date_tickers = {target: missing_active}
 
     logger.info(
         "Fetching EOD data for %d date(s), %s → %s (%d tickers, source: %s)",
-        len(fetch_dates), fetch_dates[0], fetch_dates[-1], len(universe), research_universe_source(),
+        len(fetch_dates), fetch_dates[0], fetch_dates[-1], len(universe), universe_source,
     )
 
     total_rows = 0
     failed_dates = []
     for fetch_date in fetch_dates:
-        df = polygon_client.fetch_grouped_daily(target_date=fetch_date, tickers=universe)
+        tickers = per_date_tickers.get(fetch_date, universe)
+        df = polygon_client.fetch_grouped_daily(target_date=fetch_date, tickers=tickers)
         if df.empty:
             logger.warning("No OHLCV data returned for %s", fetch_date)
             failed_dates.append(fetch_date.isoformat())

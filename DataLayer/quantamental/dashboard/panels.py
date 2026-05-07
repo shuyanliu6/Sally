@@ -59,6 +59,24 @@ def _num(value, default: float = 0.0) -> float:
         return default
 
 
+def _date_text(value) -> str:
+    if value in (None, ""):
+        return "-"
+    try:
+        return str(pd.Timestamp(value).date())
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _freshness_status_style(status: str) -> tuple[str, str]:
+    status = str(status or "BLOCKED").upper()
+    if status in {"TRUSTED", "OK"}:
+        return "ok", COLOR["positive"]
+    if status in {"LIMITED", "WARN"}:
+        return "watch", COLOR["warning"]
+    return "risk", COLOR["negative"]
+
+
 def _latest_context(signals_df: pd.DataFrame, sector_df: pd.DataFrame) -> dict:
     latest_signal = signals_df.iloc[-1] if not signals_df.empty else {}
     latest_sector = sector_df.iloc[-1] if not sector_df.empty else {}
@@ -175,14 +193,87 @@ def _top_actions(
     return actions[:3]
 
 
+def render_data_freshness_gate(freshness: dict | None, compact: bool = False):
+    freshness = freshness or {"status": "BLOCKED", "trusted": False, "checks": []}
+    status = str(freshness.get("status", "BLOCKED")).upper()
+    flag_kind, color = _freshness_status_style(status)
+    trusted = bool(freshness.get("trusted", False))
+
+    headline = {
+        "TRUSTED": "Data trusted for live ranks",
+        "LIMITED": "Data has warnings: size new trades carefully",
+        "BLOCKED": "Do not trust live ranks until data is fixed",
+    }.get(status, "Do not trust live ranks until data is fixed")
+    st.markdown(
+        f"<div style='margin:0.15rem 0 0.85rem 0'>"
+        f"<b style='color:{color}'>{escape(headline)}</b> "
+        f"<span class='q-flag q-flag-{flag_kind}'>{escape(status)}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    checks = pd.DataFrame(freshness.get("checks", []))
+    if checks.empty:
+        st.warning("Freshness checks are unavailable.")
+        return
+
+    if compact:
+        bad = checks[~checks["status"].astype(str).str.upper().eq("OK")]
+        if bad.empty:
+            st.caption("OHLCV, stock signals, macro/sector signals, and alpha ranks are fresh.")
+            return
+        flags = []
+        for _, row in bad.iterrows():
+            kind, _ = _freshness_status_style(row.get("status"))
+            latest = _date_text(row.get("latest_date"))
+            expected = _date_text(row.get("expected_date"))
+            flags.append((kind, f"{row.get('component')}: {latest} vs expected {expected}"))
+        flag_html = "".join(
+            f"<span class='q-flag q-flag-{kind}'>{escape(text)}</span>"
+            for kind, text in flags
+        )
+        st.markdown(flag_html, unsafe_allow_html=True)
+        return
+
+    display = checks.copy()
+    display["latest_date"] = display["latest_date"].map(_date_text)
+    display["expected_date"] = display["expected_date"].map(_date_text)
+    display["lag_days"] = display["lag_days"].map(lambda v: "-" if pd.isna(v) else int(v))
+    display = display.rename(
+        columns={
+            "component": "Component",
+            "status": "Status",
+            "latest_date": "Latest",
+            "expected_date": "Expected",
+            "lag_days": "Lag",
+            "detail": "Detail",
+            "fix": "Fix",
+        }
+    )
+
+    def status_style(value):
+        _, status_color = _freshness_status_style(str(value))
+        return f"color: {status_color}; font-weight: 700"
+
+    styled = display.style.map(status_style, subset=["Status"]) if "Status" in display else display
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    if not trusted:
+        fixes = [str(v) for v in checks.loc[checks["status"].ne("OK"), "fix"].dropna().unique()]
+        if fixes:
+            st.caption("Suggested fix: `" + "` or `".join(fixes[:2]) + "`")
+
+
 def render_overview(
     signals_df: pd.DataFrame,
     sector_df: pd.DataFrame,
     alpha_ranks: pd.DataFrame,
     positions_df: pd.DataFrame,
     latest_prices: dict[str, float],
+    freshness: dict | None = None,
 ):
     panel_header("Command Center", "Today", "decision queue")
+    render_data_freshness_gate(freshness, compact=True)
 
     context = _latest_context(signals_df, sector_df)
     latest_alpha = alpha_ranks.iloc[0] if not alpha_ranks.empty else {}

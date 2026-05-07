@@ -76,9 +76,10 @@ The dashboard is a decision-support cockpit, not an auto-trading screen. Read it
 in this order:
 
 1. **Overview** — start here. It combines current macro regime, sector score,
-   latest alpha leader, target exposure, portfolio drift, and the next action
-   queue. If this page says `De-risk` or `Selective only`, treat all buy ideas
-   as research candidates rather than orders.
+   data freshness, latest alpha leader, target exposure, portfolio drift, and
+   the next action queue. If this page says `BLOCKED`, `De-risk`, or
+   `Selective only`, treat all buy ideas as research candidates rather than
+   orders.
 2. **Alpha** — check the ranked stock book and validation evidence. `Alpha
    Book` shows today's ranked `TOP_BUY`, `BUY`, `HOLD`, and `AVOID` buckets plus
    target weights. `Alpha Validation` shows whether those buckets have actually
@@ -94,6 +95,9 @@ in this order:
 
 Key interpretation rules:
 
+- `TRUSTED` means OHLCV, stock signals, macro/sector signals, and alpha ranks
+  are fresh enough for live decision support. `BLOCKED` means do not trust live
+  ranks until the listed data issue is fixed.
 - `TOP_BUY` is only useful if validation is healthy. A negative `top-vs-avoid`
   spread means the ranker has not recently separated winners from avoid names.
 - `Rank IC` measures whether higher ranks tend to produce better forward

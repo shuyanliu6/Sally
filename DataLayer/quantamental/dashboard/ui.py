@@ -268,11 +268,41 @@ def apply_global_styles():
             border: 1px solid var(--q-line);
             border-radius: 8px;
             padding: 0.45rem 0.75rem;
+            color: var(--q-muted) !important;
+            opacity: 1 !important;
             white-space: nowrap;
+        }}
+        .stTabs [data-baseweb="tab"] * {{
+            color: var(--q-muted) !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+        }}
+        .stTabs [data-baseweb="tab"]:hover,
+        .stTabs [data-baseweb="tab"]:hover * {{
+            color: var(--q-ink) !important;
         }}
         .stTabs [aria-selected="true"] {{
             border-color: {COLOR["info"]};
-            color: {COLOR["info"]};
+            color: {COLOR["info"]} !important;
+        }}
+        .stTabs [aria-selected="true"],
+        .stTabs [aria-selected="true"] * {{
+            color: {COLOR["info"]} !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+        }}
+        div[data-testid="stButton"] button {{
+            color: var(--q-ink) !important;
+            opacity: 1 !important;
+        }}
+        div[data-testid="stButton"] button * {{
+            color: inherit !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+        }}
+        div[data-testid="stButton"] button:hover,
+        div[data-testid="stButton"] button:hover * {{
+            color: {COLOR["info"]} !important;
         }}
         div[data-testid="stDataFrame"] {{
             border: 1px solid var(--q-line);

@@ -211,6 +211,26 @@ to read it is top-down:
 
 The `Overview` tab compresses the whole system into a daily decision queue.
 
+The first block is the **Data Freshness Trust Gate**:
+
+| Status | Meaning | Action |
+|---|---|---|
+| `TRUSTED` | OHLCV, stock signals, macro/sector signals, and alpha ranks are fresh | Live ranks can be used as decision support |
+| `LIMITED` | One or more inputs are slightly stale | Reduce confidence and size; verify before trading |
+| `BLOCKED` | A required input is stale, missing, or failed to query | Do not trust live ranks until fixed |
+
+The gate checks:
+
+- `OHLCV`: latest candidate-universe price data and candidate coverage.
+- `Stock Signals`: latest per-candidate stock signal rows and coverage.
+- `Macro Regime`: latest regime signal row.
+- `Sector Signals`: latest AI-infra sector row.
+- `Alpha Ranks`: latest saved rank file date.
+
+Important: for OHLCV, the expected date waits until after the US market close
+buffer. Before the next daily bar is realistically available, the dashboard
+expects the previous trading day.
+
 Top metrics:
 
 | Metric | Meaning | How to read it |
@@ -244,6 +264,11 @@ manager question: **what deserves attention today?**
 ### 3.2 Alpha — stock selection and validation
 
 The `Alpha` tab has two parts: `Alpha Book` and `Alpha Validation`.
+
+The full Data Freshness Trust Gate is repeated at the top of this tab. If it is
+`BLOCKED`, read the rankings as stale research output only. The table shows the
+latest date, expected date, lag, detail, and suggested fix command for each
+input.
 
 #### Alpha Book
 
@@ -443,12 +468,14 @@ you allow into the candidate universe.
 Before making any trade decision:
 
 1. Confirm data is fresh with `python scripts/check_data.py`.
-2. Open `Overview`; note stance, target exposure, and risk flags.
-3. Open `Alpha`; check whether validation supports trusting the ranker.
-4. Review top `TOP_BUY` and `BUY` names, but reject them if macro or sector
+2. Open `Overview`; stop immediately if the Data Freshness Trust Gate is
+   `BLOCKED`.
+3. Note stance, target exposure, and risk flags.
+4. Open `Alpha`; check whether validation supports trusting the ranker.
+5. Review top `TOP_BUY` and `BUY` names, but reject them if macro or sector
    gates are closed.
-5. Open `Portfolio`; handle stop-loss and drift issues before new entries.
-6. Log any actual trade decision in the journal.
+6. Open `Portfolio`; handle stop-loss and drift issues before new entries.
+7. Log any actual trade decision in the journal.
 
 ---
 
