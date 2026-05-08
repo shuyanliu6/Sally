@@ -159,3 +159,38 @@ def load_earnings_events(
             ]
         )
     return pd.DataFrame([dict(r) for r in rows])
+
+
+def active_pead_events(
+    asof: str | date | pd.Timestamp,
+    symbols: list[str] | None = None,
+    path: str = SQLITE_PATH,
+) -> pd.DataFrame:
+    """Return earnings events still inside the PEAD window as of ``asof``."""
+    from quantamental.signals.stock import PEAD_DURATION_DAYS, score_pead
+
+    asof_date = pd.Timestamp(asof).date()
+    start = asof_date - pd.Timedelta(days=PEAD_DURATION_DAYS).to_pytimedelta()
+    events = load_earnings_events(symbols=symbols, start=start, end=asof_date, path=path)
+    if events.empty:
+        return events.assign(days_since_report=[], days_remaining=[], pead_signal=[])
+
+    out = events.copy()
+    out["report_date"] = pd.to_datetime(out["report_date"], errors="coerce").dt.date
+    out = out[out["report_date"].notna()].copy()
+    out["days_since_report"] = out["report_date"].map(lambda d: (asof_date - d).days)
+    out = out[(out["days_since_report"] >= 0) & (out["days_since_report"] < PEAD_DURATION_DAYS)].copy()
+    if out.empty:
+        return out.assign(days_remaining=[], pead_signal=[])
+
+    out["days_remaining"] = PEAD_DURATION_DAYS - out["days_since_report"]
+    out["pead_signal"] = out.apply(
+        lambda row: score_pead(
+            (float(row["surprise_pct"]) / 100.0)
+            if pd.notna(row.get("surprise_pct"))
+            else None,
+            int(row["days_since_report"]),
+        ),
+        axis=1,
+    )
+    return out.sort_values(["days_remaining", "symbol"], ascending=[True, True]).reset_index(drop=True)

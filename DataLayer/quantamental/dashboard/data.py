@@ -1,7 +1,8 @@
 import pandas as pd
 import streamlit as st
+from pathlib import Path
 
-from quantamental.config.settings import SIGNAL_HISTORY_DAYS
+from quantamental.config.settings import PARQUET_DIR, SIGNAL_HISTORY_DAYS, SQLITE_PATH
 
 
 @st.cache_data(ttl=60)
@@ -94,6 +95,24 @@ def load_latest_alpha_ranks() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
+def load_alpha_rank_artifact_info() -> dict:
+    path = Path(PARQUET_DIR) / "alpha" / "alpha_ranks_latest.parquet"
+    resolved = path.resolve()
+    info = {
+        "path": str(resolved),
+        "exists": path.exists(),
+        "modified_at": None,
+        "size_bytes": None,
+    }
+    if not path.exists():
+        return info
+    stat = path.stat()
+    info["modified_at"] = pd.Timestamp(stat.st_mtime, unit="s").isoformat()
+    info["size_bytes"] = int(stat.st_size)
+    return info
+
+
+@st.cache_data(ttl=60)
 def load_latest_alpha_performance() -> dict[str, pd.DataFrame]:
     try:
         from quantamental.alpha.reporting import load_latest_alpha_performance as _load
@@ -128,3 +147,17 @@ def load_data_freshness() -> dict:
                 }
             ],
         }
+
+
+@st.cache_data(ttl=60)
+def load_active_pead_events(asof: str | None = None) -> pd.DataFrame:
+    try:
+        from quantamental.config.universe import load_candidate_list
+        from quantamental.signals.earnings import active_pead_events
+
+        if asof is None:
+            asof = pd.Timestamp.today().date().isoformat()
+        return active_pead_events(asof=asof, symbols=load_candidate_list(), path=SQLITE_PATH)
+    except Exception as exc:
+        st.warning(f"PEAD events unavailable: {exc}")
+        return pd.DataFrame()

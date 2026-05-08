@@ -16,6 +16,8 @@ except ImportError:
 
 from quantamental.config.settings import DASHBOARD_REFRESH_SECONDS, SQLITE_PATH
 from quantamental.dashboard.data import (
+    load_active_pead_events,
+    load_alpha_rank_artifact_info,
     load_data_freshness,
     load_latest_alpha_performance,
     load_latest_alpha_ranks,
@@ -33,6 +35,7 @@ from quantamental.dashboard.panels import (
     render_panel_g,
     render_panel_h_alpha,
     render_panel_i_alpha_validation,
+    render_panel_j_pead_events,
     render_portfolio_risk,
     render_data_freshness_gate,
     render_overview,
@@ -65,6 +68,13 @@ def main():
     signals_df = load_regime_signals()
     sector_df = load_sector_signals(days=90)
     alpha_ranks = load_latest_alpha_ranks()
+    alpha_artifact = load_alpha_rank_artifact_info()
+    alpha_asof = (
+        str(alpha_ranks["asof_date"].iloc[0])
+        if not alpha_ranks.empty and "asof_date" in alpha_ranks
+        else None
+    )
+    pead_events = load_active_pead_events(alpha_asof)
     alpha_performance = load_latest_alpha_performance()
     freshness = load_data_freshness()
     latest_prices = load_latest_prices()
@@ -79,7 +89,8 @@ def main():
 
     with alpha_tab:
         render_data_freshness_gate(freshness)
-        render_panel_h_alpha(alpha_ranks)
+        render_panel_h_alpha(alpha_ranks, artifact_info=alpha_artifact)
+        render_panel_j_pead_events(pead_events, alpha_asof)
         render_panel_i_alpha_validation(alpha_performance)
 
     with signals_tab:

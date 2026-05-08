@@ -7,7 +7,7 @@ from quantamental.alpha.features import add_forward_returns, build_features
 from quantamental.alpha.performance import build_performance_report
 from quantamental.alpha.portfolio import construct_portfolio
 from quantamental.alpha.ranking import rank_alpha
-from quantamental.signals.earnings import load_earnings_events, log_earnings_event
+from quantamental.signals.earnings import active_pead_events, load_earnings_events, log_earnings_event
 
 
 def _ohlcv(symbols=("AAA", "BBB", "CCC", "SMH", "SPY", "QQQ"), periods=80):
@@ -200,6 +200,21 @@ def test_earnings_event_log_derives_and_loads_surprise(tmp_path):
     assert event_id == 1
     assert events.iloc[0]["symbol"] == "AAA"
     assert round(float(events.iloc[0]["surprise_pct"]), 1) == 20.0
+
+
+def test_active_pead_events_filters_window_and_scores(tmp_path):
+    db_path = tmp_path / "meta.db"
+    log_earnings_event("AAA", "2024-04-01", surprise_pct=15.0, path=str(db_path))
+    log_earnings_event("BBB", "2024-03-01", surprise_pct=15.0, path=str(db_path))
+    log_earnings_event("CCC", "2024-04-05", surprise_pct=-15.0, path=str(db_path))
+
+    active = active_pead_events("2024-04-10", symbols=["AAA", "BBB", "CCC"], path=str(db_path))
+
+    assert set(active["symbol"]) == {"AAA", "CCC"}
+    by_symbol = active.set_index("symbol")
+    assert by_symbol.at["AAA", "pead_signal"] > 0
+    assert by_symbol.at["CCC", "pead_signal"] < 0
+    assert by_symbol.at["AAA", "days_remaining"] == 19
 
 
 def test_forward_returns_use_next_close_after_signal_date():

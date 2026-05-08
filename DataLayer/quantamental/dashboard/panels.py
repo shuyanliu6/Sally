@@ -750,7 +750,11 @@ def render_panel_g():
     )
 
 
-def render_panel_h_alpha(ranks: pd.DataFrame | None = None, compact: bool = False):
+def render_panel_h_alpha(
+    ranks: pd.DataFrame | None = None,
+    compact: bool = False,
+    artifact_info: dict | None = None,
+):
     panel_header("Alpha Book", "Selection", "V1 long-only")
     if ranks is None:
         ranks = load_latest_alpha_ranks()
@@ -765,10 +769,24 @@ def render_panel_h_alpha(ranks: pd.DataFrame | None = None, compact: bool = Fals
     deployed = float(ranks.get("target_weight", pd.Series(dtype=float)).sum())
     buys_allowed = bool(ranks.get("new_buys_allowed", pd.Series([False])).iloc[0])
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("As of", str(latest_asof))
     c2.metric("Target exposure", f"{deployed:.0%}")
     c3.metric("New buys", "Allowed" if buys_allowed else "Blocked")
+    if artifact_info and artifact_info.get("modified_at"):
+        c4.metric("Rank file", _date_text(artifact_info.get("modified_at")), "modified")
+    else:
+        c4.metric("Rank file", "Missing" if artifact_info else "Unknown")
+
+    if artifact_info:
+        path = artifact_info.get("path", "")
+        modified = artifact_info.get("modified_at")
+        size = artifact_info.get("size_bytes")
+        st.caption(
+            f"Alpha artifact: `{path}`"
+            + (f" | modified `{modified}`" if modified else "")
+            + (f" | {int(size):,} bytes" if size else "")
+        )
 
     if not compact and "bucket" in ranks:
         counts = ranks["bucket"].value_counts()
@@ -816,6 +834,72 @@ def render_panel_h_alpha(ranks: pd.DataFrame | None = None, compact: bool = Fals
 
     styled = display.style.map(bucket_style, subset=["Bucket"]) if "Bucket" in display else display
     st.dataframe(styled, use_container_width=True, hide_index=True, height=330 if compact else None)
+
+
+def render_panel_j_pead_events(events: pd.DataFrame | None = None, asof: str | None = None):
+    panel_header("PEAD Events", "Earnings", "active 28d window")
+    events = events if events is not None else pd.DataFrame()
+    asof_text = asof or pd.Timestamp.today().date().isoformat()
+
+    if events.empty:
+        st.info(
+            "No active PEAD events for this alpha as-of date. Log one with:\n\n"
+            "`python scripts/log_earnings_event.py --symbol TICKER --report-date YYYY-MM-DD --surprise-pct 12.5`"
+        )
+        return
+
+    events = events.copy()
+    for col in ["surprise_pct", "pead_signal", "days_since_report", "days_remaining"]:
+        if col in events:
+            events[col] = pd.to_numeric(events[col], errors="coerce")
+
+    pos = int((events.get("pead_signal", pd.Series(dtype=float)) > 0).sum())
+    neg = int((events.get("pead_signal", pd.Series(dtype=float)) < 0).sum())
+    expiring = int((events.get("days_remaining", pd.Series(dtype=float)) <= 5).sum())
+    cols = st.columns(4)
+    cols[0].metric("As of", str(asof_text))
+    cols[1].metric("Active events", len(events))
+    cols[2].metric("Positive / Negative", f"{pos} / {neg}")
+    cols[3].metric("Expiring soon", expiring, "<=5 days")
+
+    display_cols = [
+        "symbol",
+        "report_date",
+        "fiscal_period",
+        "surprise_pct",
+        "pead_signal",
+        "days_since_report",
+        "days_remaining",
+        "source",
+        "notes",
+    ]
+    existing = [c for c in display_cols if c in events.columns]
+    display = events[existing].copy()
+    if "surprise_pct" in display:
+        display["surprise_pct"] = display["surprise_pct"].map(lambda v: f"{_num(v):+.1f}%")
+    rename = {
+        "symbol": "Ticker",
+        "report_date": "Report date",
+        "fiscal_period": "Period",
+        "surprise_pct": "EPS surprise",
+        "pead_signal": "PEAD",
+        "days_since_report": "Days since",
+        "days_remaining": "Days left",
+        "source": "Source",
+        "notes": "Notes",
+    }
+    display = display.rename(columns=rename)
+
+    def pead_style(value):
+        score = _num(value)
+        if score > 0:
+            return f"color: {COLOR['positive']}; font-weight: 700"
+        if score < 0:
+            return f"color: {COLOR['negative']}; font-weight: 700"
+        return f"color: {COLOR['inactive']}; font-weight: 700"
+
+    styled = display.style.map(pead_style, subset=["PEAD"]) if "PEAD" in display else display
+    st.dataframe(styled, use_container_width=True, hide_index=True)
 
 
 def render_panel_i_alpha_validation(performance: dict[str, pd.DataFrame] | None = None):
