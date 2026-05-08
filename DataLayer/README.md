@@ -165,6 +165,49 @@ This report tracks whether `TOP_BUY` and `BUY` buckets actually beat `SMH`
 and the equal-weight candidate basket over 20/40 trading-day horizons. Saved
 reports live under `data/parquet/alpha/performance/`.
 
+Diagnose which alpha components are helping or hurting:
+
+```bash
+python scripts/diagnose_alpha.py --start 2025-01-01 --end 2026-04-01
+```
+
+This writes component IC, top/bottom spread, bucket attribution, and review
+recommendations under `data/parquet/alpha/diagnostics/`. Use this before
+changing ranker weights; a weak live ranker needs evidence about which signal is
+bad, not just a new score formula.
+
+Run multi-window diagnostics before trusting a ranker change:
+
+```bash
+python scripts/diagnose_alpha.py \
+  --window 2025-01-01:2026-04-01 \
+  --window 2025-07-01:2026-04-01
+```
+
+PEAD uses manually logged EPS surprise events from SQLite. Log surprises in
+percent points, then rerun stock signals or alpha diagnostics:
+
+```bash
+python scripts/log_earnings_event.py \
+  --symbol NVDA \
+  --report-date 2026-05-01 \
+  --fiscal-period 2026-Q1 \
+  --surprise-pct 12.5 \
+  --source "company release"
+
+python scripts/log_earnings_event.py --show
+```
+
+You can also provide actual and consensus EPS instead of `--surprise-pct`:
+
+```bash
+python scripts/log_earnings_event.py \
+  --symbol NVDA \
+  --report-date 2026-05-01 \
+  --eps-actual 1.20 \
+  --eps-estimate 1.00
+```
+
 Treat the ranker as decision-support until a walk-forward backtest shows that
 the signal improves forward returns versus the baselines.
 

@@ -102,6 +102,8 @@ def test_package_entrypoints_are_declared_and_importable():
         "quantamental-run-alpha": "quantamental.scripts.run_alpha:main",
         "quantamental-backtest-alpha": "quantamental.scripts.backtest_alpha:main",
         "quantamental-alpha-performance": "quantamental.scripts.alpha_performance:main",
+        "quantamental-diagnose-alpha": "quantamental.scripts.diagnose_alpha:main",
+        "quantamental-log-earnings-event": "quantamental.scripts.log_earnings_event:main",
     }
     assert scripts == expected
 

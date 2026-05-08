@@ -34,6 +34,7 @@ def run(asof=None, persist_db: bool = False, save: bool = True, top_n: int = 10)
         stock_signals=inputs.stock_signals,
         regime_signals=inputs.regime_signals,
         sector_signals=inputs.sector_signals,
+        earnings_events=inputs.earnings_events,
         symbols=symbols,
         asof=asof,
     )
@@ -79,4 +80,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

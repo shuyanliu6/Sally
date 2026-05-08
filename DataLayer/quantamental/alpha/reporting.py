@@ -161,3 +161,31 @@ def save_alpha_performance_report(report, output_dir: str | Path | None = None) 
         "latest_headline": latest_headline,
         "latest_buckets": latest_buckets,
     }
+
+
+def save_alpha_diagnostic_report(report, output_dir: str | Path | None = None) -> dict[str, Path]:
+    """Save AlphaDiagnosticReport CSV artifacts."""
+    out_dir = _output_dir(output_dir) / "diagnostics"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    components = out_dir / f"alpha_diagnostics_components_{stamp}.csv"
+    attribution = out_dir / f"alpha_diagnostics_bucket_attribution_{stamp}.csv"
+    recommendations = out_dir / f"alpha_diagnostics_recommendations_{stamp}.csv"
+    latest_components = out_dir / "alpha_diagnostics_components_latest.csv"
+    latest_attribution = out_dir / "alpha_diagnostics_bucket_attribution_latest.csv"
+    latest_recommendations = out_dir / "alpha_diagnostics_recommendations_latest.csv"
+
+    report.component_summary.to_csv(components, index=False)
+    report.bucket_attribution.to_csv(attribution, index=False)
+    report.recommendations.to_csv(recommendations, index=False)
+    report.component_summary.to_csv(latest_components, index=False)
+    report.bucket_attribution.to_csv(latest_attribution, index=False)
+    report.recommendations.to_csv(latest_recommendations, index=False)
+    return {
+        "component_summary": components,
+        "bucket_attribution": attribution,
+        "recommendations": recommendations,
+        "latest_component_summary": latest_components,
+        "latest_bucket_attribution": latest_attribution,
+        "latest_recommendations": latest_recommendations,
+    }

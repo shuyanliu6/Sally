@@ -76,6 +76,7 @@ def build_rank_log(
     horizons: tuple[int, ...] = (20, 40),
     benchmark: str = DEFAULT_BENCHMARK,
     frequency: str = "weekly",
+    earnings_events: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Build historical rank rows with forward-return labels."""
     dates = _evaluation_dates(ohlcv, start, end, benchmark, frequency)
@@ -87,6 +88,7 @@ def build_rank_log(
             stock_signals=stock_signals,
             regime_signals=regime_signals,
             sector_signals=sector_signals,
+            earnings_events=earnings_events,
             symbols=symbols,
             asof=asof,
             benchmark=benchmark,
@@ -195,12 +197,14 @@ def build_performance_report(
     horizons: tuple[int, ...] = (20, 40),
     benchmark: str = DEFAULT_BENCHMARK,
     frequency: str = "weekly",
+    earnings_events: pd.DataFrame | None = None,
 ) -> AlphaPerformanceReport:
     rank_log = build_rank_log(
         ohlcv=ohlcv,
         stock_signals=stock_signals,
         regime_signals=regime_signals,
         sector_signals=sector_signals,
+        earnings_events=earnings_events,
         symbols=symbols,
         start=start,
         end=end,
@@ -214,4 +218,3 @@ def build_performance_report(
         bucket_summary=summarize_buckets(rank_log, horizons=horizons, benchmark=benchmark),
         headline=headline_summary(rank_log, horizons=horizons, benchmark=benchmark),
     )
-
