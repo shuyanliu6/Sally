@@ -171,7 +171,7 @@ def score_pead(
 
     Returns: int in [-2, +2] with linear decay.
     """
-    if eps_surprise_pct is None or days_since_earnings >= duration_days:
+    if eps_surprise_pct is None or pd.isna(eps_surprise_pct) or days_since_earnings >= duration_days:
         return 0
     if days_since_earnings < 0:
         return 0   # earnings in the future, no signal yet
@@ -364,35 +364,27 @@ def compute_stock_signals_for_universe(
 
 def _load_active_earnings(asof: date) -> dict[str, dict]:
     """Read earnings events from SQLite for any ticker still inside the PEAD window."""
-    import sqlite3
-    from contextlib import closing
-    from quantamental.config.settings import SQLITE_PATH
+    from quantamental.signals.earnings import load_earnings_events
 
     cutoff = asof - pd.Timedelta(days=PEAD_DURATION_DAYS).to_pytimedelta()
-    try:
-        with closing(sqlite3.connect(SQLITE_PATH)) as con:
-            con.row_factory = sqlite3.Row
-            cur = con.execute(
-                "SELECT symbol, report_date, surprise_pct "
-                "FROM earnings_events WHERE report_date >= ?",
-                (cutoff.isoformat(),),
-            )
-            rows = cur.fetchall()
-    except sqlite3.OperationalError:
+    events = load_earnings_events(start=cutoff, end=asof)
+    if events.empty:
         return {}
 
     result = {}
-    for r in rows:
+    for _, r in events.iterrows():
         try:
-            d = date.fromisoformat(r["report_date"])
+            d = date.fromisoformat(str(r["report_date"]))
         except Exception:
             continue
         # Keep the most recent event per ticker
-        prev = result.get(r["symbol"])
+        symbol = str(r["symbol"]).upper()
+        prev = result.get(symbol)
         if prev is None or d > prev["report_date"]:
-            result[r["symbol"]] = {
+            result[symbol] = {
                 "report_date":      d,
                 "eps_surprise_pct": (r["surprise_pct"] / 100.0)
-                                    if r["surprise_pct"] is not None else None,
+                                    if r["surprise_pct"] is not None and not pd.isna(r["surprise_pct"])
+                                    else None,
             }
     return result

@@ -25,6 +25,8 @@ import os
 import sys
 from datetime import date, timedelta
 
+import pandas as pd
+
 if __package__ in (None, ""):
     from _bootstrap import add_project_root
     add_project_root(__file__)
@@ -147,7 +149,10 @@ def _existing_pairs(start: date, end: date, writer) -> set:
             """,
             {"start": str(start), "end": str(end)},
         )
-        return set(zip(existing_df["symbol"], existing_df["d"].astype(str)))
+        if existing_df.empty:
+            return set()
+        existing_dates = pd.to_datetime(existing_df["d"], errors="coerce").dt.date.astype(str)
+        return set(zip(existing_df["symbol"], existing_dates))
     except Exception as exc:
         logger.warning("Could not query existing data (%s) — will insert all", exc)
         return set()

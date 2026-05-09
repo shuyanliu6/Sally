@@ -7,7 +7,7 @@ QuestDB and reused by live ranking, reporting, and backtests.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -15,6 +15,17 @@ import pandas as pd
 
 DEFAULT_BENCHMARK = "SMH"
 DEFAULT_MARKET_BENCHMARKS = ("SMH", "SPY", "QQQ")
+STOCK_SIGNAL_COLUMNS = (
+    "ema_20",
+    "ema_60",
+    "ema_signal",
+    "rsi_14",
+    "rsi_signal",
+    "volume_ratio",
+    "volume_signal",
+    "pead_signal",
+    "stock_composite",
+)
 
 
 @dataclass(frozen=True)
@@ -23,12 +34,18 @@ class FeatureInputs:
     stock_signals: pd.DataFrame
     regime_signals: pd.DataFrame
     sector_signals: pd.DataFrame
+    earnings_events: pd.DataFrame | None = None
 
 
 def _as_timestamp(value: date | str | pd.Timestamp | None) -> pd.Timestamp:
     if value is None:
         return pd.Timestamp.utcnow().normalize()
-    return pd.Timestamp(value)
+    ts = pd.Timestamp(value)
+    if isinstance(value, str) and len(value.strip()) == 10:
+        return ts + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return ts + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+    return ts
 
 
 def _normalize_ts(df: pd.DataFrame) -> pd.DataFrame:
@@ -86,6 +103,7 @@ def _symbol_risk_rows(ohlcv: pd.DataFrame, symbols: list[str], asof: pd.Timestam
         close = pd.to_numeric(group["close"], errors="coerce")
         volume = pd.to_numeric(group.get("volume", pd.Series(index=group.index)), errors="coerce")
         returns = close.pct_change()
+        latest_ts = pd.Timestamp(group["ts"].iloc[-1])
         latest_close = _safe_float(close.iloc[-1], np.nan)
         high_60 = close.tail(60).max()
         drawdown_60 = (latest_close / high_60 - 1.0) if high_60 and not pd.isna(high_60) else 0.0
@@ -94,6 +112,8 @@ def _symbol_risk_rows(ohlcv: pd.DataFrame, symbols: list[str], asof: pd.Timestam
             {
                 "symbol": symbol,
                 "asof_date": asof.date().isoformat(),
+                "price_asof_date": latest_ts.date().isoformat(),
+                "price_age_days": max(0, (asof.normalize() - latest_ts.normalize()).days),
                 "close": latest_close,
                 "momentum_20": _safe_float(close.pct_change(20).iloc[-1]),
                 "volatility_20": _safe_float(returns.tail(20).std() * np.sqrt(252)),
@@ -130,9 +150,98 @@ def _beta_rows(
         if symbol not in returns or symbol == benchmark or not bench_var:
             beta = 1.0
         else:
-            beta = returns[symbol].cov(bench) / bench_var
+            pair = returns[[symbol, benchmark]].dropna()
+            if len(pair) < 2:
+                beta = 1.0
+            else:
+                beta = pair[symbol].cov(pair[benchmark]) / bench_var
         records.append({"symbol": symbol, "beta_60": _safe_float(beta, 1.0)})
     return pd.DataFrame(records)
+
+
+def _technical_stock_signal_rows(
+    ohlcv: pd.DataFrame,
+    symbols: list[str],
+    asof: pd.Timestamp,
+    earnings_events: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Compute OHLCV-only stock signals when historical stock_signals are absent."""
+    working = _latest_on_or_before(ohlcv, asof)
+    if working.empty:
+        return pd.DataFrame({"symbol": symbols})
+
+    from quantamental.signals.stock import score_one_ticker
+
+    earnings_map = _earnings_event_map(earnings_events, symbols, asof)
+
+    records = []
+    for symbol in symbols:
+        group = working[working["symbol"] == symbol].sort_values("ts").tail(120)
+        if group.empty:
+            records.append({"symbol": symbol})
+            continue
+        signal_group = group.copy()
+        if "volume" not in signal_group:
+            signal_group["volume"] = 0
+        earnings_event = earnings_map.get(symbol)
+        scored = score_one_ticker(
+            signal_group[["ts", "close", "volume"]],
+            earnings_event=earnings_event,
+            asof=asof.date(),
+        )
+        record = {"symbol": symbol}
+        for col in STOCK_SIGNAL_COLUMNS:
+            if col in scored:
+                record[col] = scored[col]
+        record["pead_event_active"] = bool(earnings_event)
+        records.append(record)
+    return pd.DataFrame(records)
+
+
+def _surprise_to_decimal(value) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    parsed = float(value)
+    return parsed / 100.0 if abs(parsed) > 1 else parsed
+
+
+def _earnings_event_map(
+    earnings_events: pd.DataFrame | None,
+    symbols: list[str],
+    asof: pd.Timestamp,
+) -> dict[str, dict]:
+    if earnings_events is None or earnings_events.empty:
+        return {}
+
+    from quantamental.signals.stock import PEAD_DURATION_DAYS
+
+    events = earnings_events.copy()
+    if "symbol" not in events or "report_date" not in events:
+        return {}
+    events["symbol"] = events["symbol"].astype(str).str.upper()
+    events["report_date"] = pd.to_datetime(events["report_date"], errors="coerce")
+    if getattr(events["report_date"].dt, "tz", None) is not None:
+        events["report_date"] = events["report_date"].dt.tz_convert(None)
+
+    symbol_set = {str(s).strip().upper() for s in symbols if str(s).strip()}
+    cutoff = asof - pd.Timedelta(days=PEAD_DURATION_DAYS)
+    events = events[
+        events["symbol"].isin(symbol_set)
+        & events["report_date"].notna()
+        & (events["report_date"] <= asof)
+        & (events["report_date"] >= cutoff)
+    ].sort_values("report_date")
+    if events.empty:
+        return {}
+
+    surprise_col = "surprise_pct" if "surprise_pct" in events else "eps_surprise_pct"
+    result = {}
+    for _, row in events.groupby("symbol", as_index=False).tail(1).iterrows():
+        result[str(row["symbol"])] = {
+            "report_date": pd.Timestamp(row["report_date"]).date(),
+            "eps_surprise_pct": _surprise_to_decimal(row.get(surprise_col)),
+        }
+    return result
 
 
 def build_features(
@@ -140,6 +249,7 @@ def build_features(
     stock_signals: pd.DataFrame | None = None,
     regime_signals: pd.DataFrame | None = None,
     sector_signals: pd.DataFrame | None = None,
+    earnings_events: pd.DataFrame | None = None,
     symbols: list[str] | None = None,
     asof: date | str | pd.Timestamp | None = None,
     benchmark: str = DEFAULT_BENCHMARK,
@@ -153,6 +263,7 @@ def build_features(
     stock_signals = _normalize_ts(stock_signals if stock_signals is not None else pd.DataFrame())
     regime_signals = _normalize_ts(regime_signals if regime_signals is not None else pd.DataFrame())
     sector_signals = _normalize_ts(sector_signals if sector_signals is not None else pd.DataFrame())
+    earnings_events = earnings_events if earnings_events is not None else pd.DataFrame()
 
     if symbols is None:
         if not stock_signals.empty and "symbol" in stock_signals:
@@ -177,7 +288,33 @@ def build_features(
         rows = rows.drop(columns=["asof_date_risk"])
     rows = rows.merge(beta, on="symbol", how="left")
     if not latest_stock.empty:
-        rows = rows.merge(latest_stock.drop(columns=["ts"], errors="ignore"), on="symbol", how="left")
+        stock_payload = latest_stock.drop(
+            columns=["ts", "open", "high", "low", "close", "volume"],
+            errors="ignore",
+        )
+        rows = rows.merge(stock_payload, on="symbol", how="left")
+
+    technical_fallback = _technical_stock_signal_rows(ohlcv, symbols, asof_ts, earnings_events)
+    if not technical_fallback.empty:
+        rows = rows.merge(technical_fallback, on="symbol", how="left", suffixes=("", "_fallback"))
+        active_pead = (
+            rows["pead_event_active"].fillna(False).astype(bool)
+            if "pead_event_active" in rows
+            else pd.Series(False, index=rows.index)
+        )
+        for col in STOCK_SIGNAL_COLUMNS:
+            fallback_col = f"{col}_fallback"
+            if fallback_col not in rows:
+                continue
+            if col not in rows or rows[col].isna().all():
+                rows[col] = rows[fallback_col]
+            else:
+                missing = rows[col].isna()
+                rows.loc[missing, col] = rows.loc[missing, fallback_col]
+                if col in {"pead_signal", "stock_composite"}:
+                    rows.loc[active_pead, col] = rows.loc[active_pead, fallback_col]
+            rows = rows.drop(columns=[fallback_col])
+        rows = rows.drop(columns=["pead_event_active"], errors="ignore")
 
     regime = _latest_row(regime_signals, asof_ts)
     sector = _latest_row(sector_signals, asof_ts)
@@ -196,6 +333,7 @@ def build_features(
         "addv_20": 0.0,
         "drawdown_60": 0.0,
         "beta_60": 1.0,
+        "price_age_days": 9999,
         "ema_signal": 0,
         "rsi_signal": 0,
         "volume_signal": 0,
@@ -208,6 +346,18 @@ def build_features(
         if col not in rows:
             rows[col] = default
         rows[col] = pd.to_numeric(rows[col], errors="coerce").fillna(default)
+
+    from quantamental.signals.stock import stock_composite_score
+
+    rows["stock_composite"] = rows.apply(
+        lambda row: stock_composite_score(
+            int(row["ema_signal"]),
+            int(row["rsi_signal"]),
+            int(row["volume_signal"]),
+            int(row["pead_signal"]),
+        ),
+        axis=1,
+    )
 
     return rows.sort_values("symbol").reset_index(drop=True)
 
@@ -237,7 +387,7 @@ def add_forward_returns(
 
     for idx, row in out.iterrows():
         symbol = row["symbol"]
-        asof_ts = pd.Timestamp(row["asof_date"])
+        asof_ts = _as_timestamp(row["asof_date"])
         future_dates = pivot.index[pivot.index > asof_ts]
         if symbol not in pivot or benchmark not in pivot or len(future_dates) == 0:
             continue
@@ -306,7 +456,16 @@ def load_feature_inputs_from_questdb(
         "SELECT * FROM sector_signals WHERE ts <= :asof ORDER BY ts",
         {"asof": asof_ts.isoformat()},
     )
-    return FeatureInputs(ohlcv=ohlcv, stock_signals=stock, regime_signals=regime, sector_signals=sector)
+    from quantamental.signals.earnings import load_earnings_events
+
+    earnings = load_earnings_events(symbols=symbols, start=start_ts, end=asof_ts)
+    return FeatureInputs(
+        ohlcv=ohlcv,
+        stock_signals=stock,
+        regime_signals=regime,
+        sector_signals=sector,
+        earnings_events=earnings,
+    )
 
 
 def load_backtest_inputs_from_questdb(
@@ -353,4 +512,13 @@ def load_backtest_inputs_from_questdb(
         "SELECT * FROM sector_signals WHERE ts >= :start AND ts <= :end ORDER BY ts",
         {"start": query_start.isoformat(), "end": query_end.isoformat()},
     )
-    return FeatureInputs(ohlcv=ohlcv, stock_signals=stock, regime_signals=regime, sector_signals=sector)
+    from quantamental.signals.earnings import load_earnings_events
+
+    earnings = load_earnings_events(symbols=symbols, start=query_start, end=query_end)
+    return FeatureInputs(
+        ohlcv=ohlcv,
+        stock_signals=stock,
+        regime_signals=regime,
+        sector_signals=sector,
+        earnings_events=earnings,
+    )

@@ -10,6 +10,7 @@ import pandas as pd
 
 
 MARKET_TZ = ZoneInfo("America/New_York")
+CHINA_TZ = ZoneInfo("Asia/Shanghai")
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,26 @@ def expected_market_date(now: datetime | None = None) -> date:
     if current.time() < time(18, 0):
         return previous_weekday(current_date)
     return current_date
+
+
+def dashboard_clock(now: datetime | None = None) -> dict[str, str]:
+    """Return display-ready dashboard clock context.
+
+    ``us_market_date`` is the date used by dashboard freshness and default
+    alpha runs. It is intentionally a market-session date, not local wall time.
+    """
+    current = now or datetime.now(ZoneInfo("UTC"))
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=ZoneInfo("UTC"))
+
+    china_now = current.astimezone(CHINA_TZ)
+    market_now = current.astimezone(MARKET_TZ)
+    market_date = expected_market_date(current)
+    return {
+        "china_now": china_now.strftime("%Y-%m-%d %H:%M %Z"),
+        "us_now": market_now.strftime("%Y-%m-%d %H:%M %Z"),
+        "us_market_date": market_date.isoformat(),
+    }
 
 
 def trading_day_lag(latest: date | None, expected: date | None) -> int | None:
@@ -245,13 +266,10 @@ def build_freshness_report(
         symbols = load_candidate_list()
 
     market_expected = expected_market_date(now)
-    if now is None:
-        signal_now = datetime.now(ZoneInfo("UTC"))
-    elif now.tzinfo is None:
-        signal_now = now.replace(tzinfo=ZoneInfo("UTC"))
-    else:
-        signal_now = now.astimezone(ZoneInfo("UTC"))
-    signal_expected = signal_now.date()
+    # Dashboard trust is anchored to the latest completed US market session.
+    # Signal rows may be written after midnight in Asia/UTC, but they are still
+    # supporting the previous US trading date until the next NYSE close.
+    signal_expected = market_expected
 
     checks = [
         _check_market_data(query_fn, symbols, market_expected),
@@ -272,9 +290,7 @@ def build_freshness_report(
         ),
     ]
 
-    latest_signal_dates = [c.latest_date for c in checks[1:] if c.latest_date is not None]
-    alpha_expected = max(latest_signal_dates) if latest_signal_dates else signal_expected
-    checks.append(_check_alpha_ranks(alpha_ranks, alpha_expected))
+    checks.append(_check_alpha_ranks(alpha_ranks, market_expected))
 
     if any(c.status == "FAIL" for c in checks):
         overall = "BLOCKED"
@@ -287,5 +303,6 @@ def build_freshness_report(
         "status": overall,
         "trusted": overall == "TRUSTED",
         "asof": datetime.now(ZoneInfo("UTC")).isoformat(),
+        "clock": dashboard_clock(now),
         "checks": [asdict(c) for c in checks],
     }

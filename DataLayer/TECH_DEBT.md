@@ -7,6 +7,46 @@
 
 ---
 
+## 🟠 D11 — Automate earnings event import for PEAD
+
+**Status**: 🔴 not started
+**Severity**: MEDIUM
+**Files**: `quantamental/scripts/import_earnings_events.py`, `quantamental/signals/earnings.py`
+
+### Problem
+PEAD now works when earnings events are manually logged into SQLite, but the
+operator still has to look up EPS actual, EPS estimate, report date, and
+surprise percentage by hand. Manual loading is acceptable for testing, but it
+does not scale across the AI-infra candidate universe during earnings season.
+
+### Proposed fix
+1. Add `scripts/import_earnings_events.py`.
+2. Source first-pass data from `yfinance` earnings APIs.
+3. Support:
+   - `--tickers NVDA AMD MSFT`
+   - `--candidate-list`
+   - `--start YYYY-MM-DD --end YYYY-MM-DD`
+   - `--limit N`
+   - `--dry-run`
+4. Insert only rows with report date and either:
+   - explicit surprise percentage, or
+   - both reported EPS and estimated EPS.
+5. Upsert into `earnings_events` with `source='yfinance'`.
+6. Print a review report: inserted, updated, skipped missing data, failed
+   tickers.
+
+### Acceptance
+- `--dry-run` prints events without mutating SQLite.
+- Re-running the importer is idempotent.
+- Manually corrected rows are not overwritten unless `--overwrite` is passed.
+- After import, `python scripts/diagnose_alpha.py --window ...` shows PEAD with
+  active rank dates instead of `NO_VARIATION`.
+
+### Estimated effort
+2–4 hours
+
+---
+
 ## 🟠 D4 — `validate_ohlcv` only warns, doesn't filter or persist flags
 
 **Status**: 🔴 not started

@@ -77,6 +77,7 @@ def run_backtest(
     top_n: int = 10,
     transaction_cost_bps: float = 15.0,
     benchmark: str = DEFAULT_BENCHMARK,
+    earnings_events: pd.DataFrame | None = None,
 ) -> BacktestResult:
     """Run a weekly top-N rank strategy with next-day execution."""
     prices = ohlcv.copy()
@@ -120,6 +121,7 @@ def run_backtest(
                 stock_signals=stock_signals,
                 regime_signals=regime_signals,
                 sector_signals=sector_signals,
+                earnings_events=earnings_events,
                 symbols=candidate_symbols,
                 asof=current_date,
                 benchmark=benchmark,
@@ -150,4 +152,3 @@ def run_backtest(
     metrics["information_coefficient"] = _information_coefficient(log)
     metrics["avg_holding_period_days"] = 5.0
     return BacktestResult(metrics=metrics, daily_returns=daily.reset_index(), rebalance_log=log)
-
