@@ -217,6 +217,56 @@ def test_active_pead_events_filters_window_and_scores(tmp_path):
     assert by_symbol.at["AAA", "days_remaining"] == 19
 
 
+def test_features_include_full_asof_date_and_keep_price_close():
+    ohlcv = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "ts": pd.Timestamp("2024-03-01 20:00:00"),
+                "open": 123,
+                "high": 123,
+                "low": 123,
+                "close": 123,
+                "volume": 1_000_000,
+            },
+            {
+                "symbol": "SMH",
+                "ts": pd.Timestamp("2024-03-01 20:00:00"),
+                "open": 100,
+                "high": 100,
+                "low": 100,
+                "close": 100,
+                "volume": 1_000_000,
+            },
+        ]
+    )
+    stock = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA",
+                "ts": pd.Timestamp("2024-03-01 20:00:00"),
+                "close": 0,
+                "ema_signal": 1,
+                "rsi_signal": 0,
+                "volume_signal": 0,
+                "pead_signal": 0,
+                "stock_composite": 1,
+            }
+        ]
+    )
+    features = build_features(
+        ohlcv=ohlcv,
+        stock_signals=stock,
+        regime_signals=_regime(),
+        sector_signals=_sector(),
+        symbols=["AAA"],
+        asof="2024-03-01",
+    )
+    row = features.iloc[0]
+    assert row["close"] == 123
+    assert row["price_asof_date"] == "2024-03-01"
+
+
 def test_forward_returns_use_next_close_after_signal_date():
     ohlcv = pd.DataFrame(
         [
@@ -269,6 +319,29 @@ def test_disabled_components_are_tracked_but_not_scored_in_v1():
     assert ranks["volatility_20_component"].abs().sum() == 0
     assert ranks["rsi_signal_component"].abs().sum() == 0
     assert ranks["alpha_score"].nunique() == 1
+
+
+def test_stale_price_candidate_is_forced_to_avoid():
+    ohlcv = _ohlcv(symbols=("AAA", "BBB", "SMH"), periods=80)
+    ohlcv = ohlcv[
+        ~(
+            ohlcv["symbol"].eq("AAA")
+            & (ohlcv["ts"] > pd.Timestamp("2024-02-15"))
+        )
+    ]
+    features = build_features(
+        ohlcv=ohlcv,
+        stock_signals=_stock_signals(),
+        regime_signals=_regime(),
+        sector_signals=_sector(),
+        symbols=["AAA", "BBB"],
+        asof="2024-03-01",
+    )
+    ranks = rank_alpha(features)
+    stale = ranks[ranks["symbol"].eq("AAA")].iloc[0]
+    assert stale["data_quality_flag"] == "STALE_PRICE"
+    assert stale["bucket"] == "AVOID"
+    assert "data_quality_component" in stale["score_components"]
 
 
 def test_portfolio_risk_off_blocks_new_buys_and_keeps_cash():

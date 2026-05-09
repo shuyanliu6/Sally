@@ -7,7 +7,7 @@ QuestDB and reused by live ranking, reporting, and backtests.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 import numpy as np
 import pandas as pd
@@ -40,7 +40,12 @@ class FeatureInputs:
 def _as_timestamp(value: date | str | pd.Timestamp | None) -> pd.Timestamp:
     if value is None:
         return pd.Timestamp.utcnow().normalize()
-    return pd.Timestamp(value)
+    ts = pd.Timestamp(value)
+    if isinstance(value, str) and len(value.strip()) == 10:
+        return ts + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return ts + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+    return ts
 
 
 def _normalize_ts(df: pd.DataFrame) -> pd.DataFrame:
@@ -98,6 +103,7 @@ def _symbol_risk_rows(ohlcv: pd.DataFrame, symbols: list[str], asof: pd.Timestam
         close = pd.to_numeric(group["close"], errors="coerce")
         volume = pd.to_numeric(group.get("volume", pd.Series(index=group.index)), errors="coerce")
         returns = close.pct_change()
+        latest_ts = pd.Timestamp(group["ts"].iloc[-1])
         latest_close = _safe_float(close.iloc[-1], np.nan)
         high_60 = close.tail(60).max()
         drawdown_60 = (latest_close / high_60 - 1.0) if high_60 and not pd.isna(high_60) else 0.0
@@ -106,6 +112,8 @@ def _symbol_risk_rows(ohlcv: pd.DataFrame, symbols: list[str], asof: pd.Timestam
             {
                 "symbol": symbol,
                 "asof_date": asof.date().isoformat(),
+                "price_asof_date": latest_ts.date().isoformat(),
+                "price_age_days": max(0, (asof.normalize() - latest_ts.normalize()).days),
                 "close": latest_close,
                 "momentum_20": _safe_float(close.pct_change(20).iloc[-1]),
                 "volatility_20": _safe_float(returns.tail(20).std() * np.sqrt(252)),
@@ -142,7 +150,11 @@ def _beta_rows(
         if symbol not in returns or symbol == benchmark or not bench_var:
             beta = 1.0
         else:
-            beta = returns[symbol].cov(bench) / bench_var
+            pair = returns[[symbol, benchmark]].dropna()
+            if len(pair) < 2:
+                beta = 1.0
+            else:
+                beta = pair[symbol].cov(pair[benchmark]) / bench_var
         records.append({"symbol": symbol, "beta_60": _safe_float(beta, 1.0)})
     return pd.DataFrame(records)
 
@@ -321,6 +333,7 @@ def build_features(
         "addv_20": 0.0,
         "drawdown_60": 0.0,
         "beta_60": 1.0,
+        "price_age_days": 9999,
         "ema_signal": 0,
         "rsi_signal": 0,
         "volume_signal": 0,
@@ -374,7 +387,7 @@ def add_forward_returns(
 
     for idx, row in out.iterrows():
         symbol = row["symbol"]
-        asof_ts = pd.Timestamp(row["asof_date"])
+        asof_ts = _as_timestamp(row["asof_date"])
         future_dates = pivot.index[pivot.index > asof_ts]
         if symbol not in pivot or benchmark not in pivot or len(future_dates) == 0:
             continue

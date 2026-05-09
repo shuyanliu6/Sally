@@ -23,6 +23,8 @@ COMPONENT_WEIGHTS = {
     "drawdown_60": 0.05,
 }
 
+MAX_PRICE_AGE_DAYS = 7
+
 
 def _percentile_component(series: pd.Series, *, higher_is_better: bool = True) -> pd.Series:
     values = pd.to_numeric(series, errors="coerce")
@@ -76,8 +78,25 @@ def rank_alpha(features: pd.DataFrame) -> pd.DataFrame:
     sector_score = df["sector_score"] if "sector_score" in df else pd.Series(0.0, index=df.index)
     df["context_macro_component"] = macro_score.apply(lambda v: _bounded_context(v, 8.0) * 0.10)
     df["context_sector_component"] = sector_score.apply(lambda v: _bounded_context(v, 8.0) * 0.10)
+    price_age = pd.to_numeric(
+        df.get("price_age_days", pd.Series(0, index=df.index)),
+        errors="coerce",
+    ).fillna(9999)
+    close = pd.to_numeric(df.get("close", pd.Series(0, index=df.index)), errors="coerce").fillna(0)
+    no_price = close <= 0
+    stale_price = price_age > MAX_PRICE_AGE_DAYS
+    df["data_quality_flag"] = "OK"
+    df.loc[stale_price, "data_quality_flag"] = "STALE_PRICE"
+    df.loc[no_price, "data_quality_flag"] = "NO_PRICE"
+    df["data_quality_component"] = 0.0
+    df.loc[stale_price, "data_quality_component"] = -0.75
+    df.loc[no_price, "data_quality_component"] = -1.00
 
-    raw_cols = component_cols + ["context_macro_component", "context_sector_component"]
+    raw_cols = component_cols + [
+        "context_macro_component",
+        "context_sector_component",
+        "data_quality_component",
+    ]
     df["alpha_raw"] = df[raw_cols].sum(axis=1).clip(-1.0, 1.0)
     df["alpha_score"] = (50.0 + 50.0 * df["alpha_raw"]).round(2)
     df = df.sort_values(["alpha_score", "symbol"], ascending=[False, True]).reset_index(drop=True)
@@ -87,6 +106,7 @@ def rank_alpha(features: pd.DataFrame) -> pd.DataFrame:
         _bucket(int(rank), total, float(score))
         for rank, score in zip(df["rank"], df["alpha_score"], strict=False)
     ]
+    df.loc[df["data_quality_flag"].ne("OK"), "bucket"] = "AVOID"
 
     def components_json(row: pd.Series) -> str:
         payload = {col: round(float(row[col]), 4) for col in raw_cols}

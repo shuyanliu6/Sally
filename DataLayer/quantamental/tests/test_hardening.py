@@ -42,6 +42,24 @@ def test_symbol_list_clause_dedupes_and_binds_values():
     assert params == {"sym_0": "AMD", "sym_1": "NVDA"}
 
 
+def test_backfill_existing_pairs_normalizes_questdb_dates():
+    from datetime import date
+
+    from quantamental.scripts.backfill import _existing_pairs
+
+    class FakeWriter:
+        def query(self, *_args, **_kwargs):
+            return pd.DataFrame(
+                [
+                    {"symbol": "PSTG", "d": "2026-04-16 20:00:00"},
+                    {"symbol": "ASGN", "d": pd.Timestamp("2026-04-23 04:00:00")},
+                ]
+            )
+
+    pairs = _existing_pairs(date(2026, 4, 1), date(2026, 5, 1), FakeWriter())
+    assert pairs == {("PSTG", "2026-04-16"), ("ASGN", "2026-04-23")}
+
+
 def test_apply_migration_skips_already_applied():
     migration = schema.Migration("001_test", "test", "ALTER TABLE x ADD COLUMN y INT")
     with patch.object(schema, "record_migration") as record:

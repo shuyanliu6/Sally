@@ -23,7 +23,11 @@ from quantamental.config.universe import load_candidate_list
 
 
 def _parse_date(value: str | None):
-    return date.fromisoformat(value) if value else date.today()
+    if value:
+        return date.fromisoformat(value)
+    from quantamental.dashboard.freshness import expected_market_date
+
+    return expected_market_date()
 
 
 def run(asof=None, persist_db: bool = False, save: bool = True, top_n: int = 10) -> pd.DataFrame:
@@ -50,7 +54,7 @@ def run(asof=None, persist_db: bool = False, save: bool = True, top_n: int = 10)
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run V1 alpha ranking")
-    parser.add_argument("--asof", help="As-of date YYYY-MM-DD (default: today)")
+    parser.add_argument("--asof", help="As-of date YYYY-MM-DD (default: latest expected US market date)")
     parser.add_argument("--top-n", type=int, default=10, help="Target top-N holdings (default: 10)")
     parser.add_argument("--no-save", action="store_true", help="Do not save Parquet/CSV ranking artifacts")
     parser.add_argument(

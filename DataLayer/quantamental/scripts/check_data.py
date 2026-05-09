@@ -19,7 +19,8 @@ if __package__ in (None, ""):
     from _bootstrap import add_project_root
     add_project_root(__file__)
 
-from quantamental.config.universe import ALL_TICKERS, FRED_SERIES, TICKER_METADATA
+from quantamental.config.universe import FRED_SERIES, load_candidate_list, load_research_universe
+from quantamental.data.ingest.questdb_connection import symbol_list_clause
 
 # ── ANSI colours ──────────────────────────────────────────────────────────────
 GREEN  = "\033[92m"
@@ -77,6 +78,20 @@ def check_ohlcv(writer, lookback_days: int):
     expected_days = trading_days_in_range(start_date, end_date)
     expected_days = min(expected_days, lookback_days)
 
+    candidates = sorted(set(load_candidate_list()))
+    research = sorted(set(load_research_universe()))
+    active_symbols = sorted(set(candidates) | set(research))
+    candidate_set = set(candidates)
+    research_only = set(research) - candidate_set
+
+    print(
+        f"Active universe: {len(candidates)} candidate tickers"
+        f" + {len(research_only)} research-only tickers"
+    )
+
+    clause, params = symbol_list_clause(active_symbols)
+    params["start_date"] = str(start_date)
+
     summary = writer.query("""
         SELECT
             symbol,
@@ -86,12 +101,13 @@ def check_ohlcv(writer, lookback_days: int):
             last(close)        AS latest_close,
             sum(CASE WHEN close IS NULL OR close <= 0 THEN 1 ELSE 0 END) AS bad_rows
         FROM daily_ohlcv
-        WHERE ts >= :start_date
+        WHERE symbol IN ({symbols})
+          AND ts >= :start_date
         ORDER BY symbol
-    """, {"start_date": str(start_date)})
+    """.format(symbols=clause), params)
 
     found_symbols = set(summary["symbol"].tolist()) if not summary.empty else set()
-    missing = [t for t in ALL_TICKERS if t not in found_symbols]
+    missing = [t for t in active_symbols if t not in found_symbols]
 
     issues = []
 
@@ -99,13 +115,16 @@ def check_ohlcv(writer, lookback_days: int):
         print(fail(f"Missing tickers entirely ({len(missing)}): {', '.join(missing)}"))
         issues.append("missing_tickers")
     else:
-        print(ok(f"All {len(ALL_TICKERS)} tickers present"))
+        print(ok(f"All {len(active_symbols)} active tickers present"))
 
     if not summary.empty:
-        print(f"\n{'Ticker':<8} {'Rows':>6} {'First':>12} {'Last':>12} {'Latest $':>10} {'Bad':>5}")
-        print("─" * 58)
+        print("\nCandidate rows plus research exceptions:")
+        print(f"{'Ticker':<8} {'Scope':<10} {'Rows':>6} {'First':>12} {'Last':>12} {'Latest $':>10} {'Bad':>5}")
+        print("─" * 69)
+        hidden_research_ok = 0
         for _, row in summary.iterrows():
             sym       = row["symbol"]
+            scope     = "candidate" if sym in candidate_set else "research"
             rows      = int(row["rows"])
             last_date = str(row["last_date"])[:10]
             first_date= str(row["first_date"])[:10]
@@ -117,20 +136,33 @@ def check_ohlcv(writer, lookback_days: int):
             low_rows = rows < max(1, expected_days * 0.8)  # allow 20% gaps
 
             status = "  "
+            show_row = sym in candidate_set or bad > 0 or stale or low_rows
             if bad > 0:
                 status = f"{RED}BAD{RESET}"
-                issues.append(f"bad_data:{sym}")
+                issue_cat = "bad_data_candidate" if sym in candidate_set else "bad_data_research"
+                issues.append(f"{issue_cat}:{sym}")
             elif stale:
                 status = f"{YELLOW}OLD{RESET}"
-                issues.append(f"stale:{sym}")
+                issue_cat = "stale_candidate" if sym in candidate_set else "stale_research"
+                issues.append(f"{issue_cat}:{sym}")
             elif low_rows:
                 status = f"{YELLOW}GAP{RESET}"
-                issues.append(f"gaps:{sym}")
+                issue_cat = "gaps_candidate" if sym in candidate_set else "gaps_research"
+                issues.append(f"{issue_cat}:{sym}")
             else:
                 status = f"{GREEN}OK {RESET}"
 
+            if not show_row:
+                hidden_research_ok += 1
+                continue
+
             close_str = f"${close:.2f}" if close else "N/A"
-            print(f"{sym:<8} {rows:>6} {first_date:>12} {last_date:>12} {close_str:>10} {bad:>3}  {status}")
+            print(
+                f"{sym:<8} {scope:<10} {rows:>6} {first_date:>12} {last_date:>12} "
+                f"{close_str:>10} {bad:>3}  {status}"
+            )
+        if hidden_research_ok:
+            print(f"... hidden {hidden_research_ok} healthy research-only tickers")
 
     return issues
 

@@ -37,6 +37,7 @@ from quantamental.dashboard.panels import (
     render_panel_i_alpha_validation,
     render_panel_j_pead_events,
     render_portfolio_risk,
+    render_dashboard_clock,
     render_data_freshness_gate,
     render_overview,
 )
@@ -79,6 +80,8 @@ def main():
     freshness = load_data_freshness()
     latest_prices = load_latest_prices()
     positions_df = get_open_positions(SQLITE_PATH)
+
+    render_dashboard_clock(freshness)
 
     overview_tab, alpha_tab, signals_tab, portfolio_tab, universe_tab = st.tabs(
         ["Overview", "Alpha", "Signals", "Portfolio", "Universe"]

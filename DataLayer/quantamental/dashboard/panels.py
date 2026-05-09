@@ -264,6 +264,18 @@ def render_data_freshness_gate(freshness: dict | None, compact: bool = False):
             st.caption("Suggested fix: `" + "` or `".join(fixes[:2]) + "`")
 
 
+def render_dashboard_clock(freshness: dict | None):
+    clock = (freshness or {}).get("clock") or {}
+    china_now = clock.get("china_now", "-")
+    us_market_date = clock.get("us_market_date", "-")
+    us_now = clock.get("us_now", "-")
+
+    cols = st.columns(3)
+    cols[0].metric("China time", china_now)
+    cols[1].metric("U.S. market date used", us_market_date)
+    cols[2].metric("New York time", us_now)
+
+
 def render_overview(
     signals_df: pd.DataFrame,
     sector_df: pd.DataFrame,
