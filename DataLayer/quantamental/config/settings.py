@@ -6,6 +6,7 @@ load_dotenv()
 # API Keys
 POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "")
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
+FMP_API_KEY = os.getenv("FMP_API_KEY", "")
 
 # Polygon rate limiting
 # Free tier = 5 req/min. Paid Starter = unlimited (set to 300).

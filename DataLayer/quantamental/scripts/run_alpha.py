@@ -19,7 +19,7 @@ from quantamental.alpha.reporting import (
     persist_alpha_ranks_to_questdb,
     save_alpha_ranks,
 )
-from quantamental.config.universe import load_candidate_list
+from quantamental.config.universe import load_equity_candidate_list
 
 
 def _parse_date(value: str | None):
@@ -31,7 +31,7 @@ def _parse_date(value: str | None):
 
 
 def run(asof=None, persist_db: bool = False, save: bool = True, top_n: int = 10) -> pd.DataFrame:
-    symbols = load_candidate_list()
+    symbols = load_equity_candidate_list()
     inputs = load_feature_inputs_from_questdb(symbols=symbols, asof=asof)
     features = build_features(
         ohlcv=inputs.ohlcv,

@@ -152,12 +152,18 @@ def load_data_freshness() -> dict:
 @st.cache_data(ttl=60)
 def load_active_pead_events(asof: str | None = None) -> pd.DataFrame:
     try:
-        from quantamental.config.universe import load_candidate_list
+        from quantamental.config import universe as universe_config
         from quantamental.signals.earnings import active_pead_events
 
         if asof is None:
             asof = pd.Timestamp.today().date().isoformat()
-        return active_pead_events(asof=asof, symbols=load_candidate_list(), path=SQLITE_PATH)
+        loader = getattr(universe_config, "load_equity_candidate_list", None)
+        if callable(loader):
+            symbols = loader()
+        else:
+            known_etfs = {"AIQ", "BOTZ", "EWY", "QQQ", "QQQM", "SMH", "SOXX", "SPY", "XLK"}
+            symbols = [s for s in universe_config.load_candidate_list() if s not in known_etfs]
+        return active_pead_events(asof=asof, symbols=symbols, path=SQLITE_PATH)
     except Exception as exc:
         st.warning(f"PEAD events unavailable: {exc}")
         return pd.DataFrame()

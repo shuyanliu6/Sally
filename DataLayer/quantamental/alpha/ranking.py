@@ -15,7 +15,9 @@ COMPONENT_WEIGHTS = {
     # stock_composite, but V1 no longer double-counts it as a separate factor.
     "rsi_signal": 0.00,
     "volume_signal": 0.08,
-    "pead_signal": 0.12,
+    # PEAD remains collected and displayed, but is observe-only until provider
+    # consensus quality is validated across sources.
+    "pead_signal": 0.00,
     "momentum_20": 0.15,
     # Diagnostics showed the low-volatility reward was harmful in the current
     # validation window. Keep the feature available, but do not score it in V1.

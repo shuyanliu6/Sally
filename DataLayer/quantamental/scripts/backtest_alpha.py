@@ -13,7 +13,7 @@ if __package__ in (None, ""):
 from quantamental.alpha.backtest import run_backtest
 from quantamental.alpha.features import load_backtest_inputs_from_questdb
 from quantamental.alpha.reporting import save_backtest_report
-from quantamental.config.universe import load_candidate_list
+from quantamental.config.universe import load_equity_candidate_list
 
 
 def _date_arg(value: str) -> date:
@@ -34,7 +34,7 @@ def main() -> int:
     parser.add_argument("--no-save", action="store_true", help="Do not save report CSVs")
     args = parser.parse_args()
 
-    symbols = load_candidate_list()
+    symbols = load_equity_candidate_list()
     inputs = load_backtest_inputs_from_questdb(symbols=symbols, start=args.start, end=args.end)
     result = run_backtest(
         ohlcv=inputs.ohlcv,

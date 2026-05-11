@@ -48,8 +48,8 @@ BASE_CANDIDATES = {
     "power_cooling": ["VRT", "CEG", "ETN", "GEV", "VST"],
     "application_architecture": ["META", "NOW", "PLTR"],
     "networking": ["MRVL", "ANET", "COHR"],
-    "non_us": ["ASML", "EWY"],
-    "benchmarks": ["SPY", "QQQ", "SMH"],
+    "non_us": ["ASML"],
+    "benchmarks": ["SPY", "QQQ", "SMH", "EWY"],
 }
 
 BASE_CANDIDATE_TICKERS = [t for tickers in BASE_CANDIDATES.values() for t in tickers]
@@ -58,6 +58,18 @@ BASE_CANDIDATE_TICKERS = [t for tickers in BASE_CANDIDATES.values() for t in tic
 UNIVERSE = BASE_CANDIDATES
 ALL_TICKERS = BASE_CANDIDATE_TICKERS
 BENCHMARKS = BASE_CANDIDATES["benchmarks"]
+KNOWN_ETFS = sorted(
+    set(BENCHMARKS)
+    | {
+        "AIQ",
+        "BOTZ",
+        "EWY",
+        "QQQM",
+        "SOXX",
+        "XLK",
+    }
+)
+ETF_SECTORS = {"benchmark", "benchmarks", "etf", "etfs", "benchmark_etfs"}
 
 
 # ── Dynamic loaders ───────────────────────────────────────────────────────────
@@ -136,6 +148,56 @@ def load_candidate_list() -> list[str]:
     grouped = load_candidate_list_by_sector()
     flat = sorted({t for tickers in grouped.values() for t in tickers})
     return flat
+
+
+def is_etf_symbol(symbol: str, sector: str | None = None) -> bool:
+    """Return True when a configured candidate is an ETF/benchmark instrument."""
+    ticker = str(symbol or "").strip().upper()
+    sector_key = str(sector or "").strip().lower()
+    meta = TICKER_METADATA.get(ticker, {})
+    name = str(meta.get("name", "")).upper()
+    return sector_key in ETF_SECTORS or ticker in KNOWN_ETFS or " ETF" in f" {name}"
+
+
+def split_candidate_list_by_instrument(
+    grouped: dict[str, list[str]] | None = None,
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Split candidate sectors into single-name equities and ETF/benchmark instruments."""
+    grouped = grouped or load_candidate_list_by_sector()
+    equities: dict[str, list[str]] = {}
+    etfs: dict[str, list[str]] = {}
+    for sector, tickers in grouped.items():
+        equity_tickers = sorted(t for t in tickers if not is_etf_symbol(t, sector))
+        etf_tickers = sorted(t for t in tickers if is_etf_symbol(t, sector))
+        if equity_tickers:
+            equities[sector] = equity_tickers
+        if etf_tickers:
+            etfs[sector] = etf_tickers
+    return equities, etfs
+
+
+def load_equity_candidate_list_by_sector() -> dict[str, list[str]]:
+    """Return candidate sectors with ETFs/benchmarks removed."""
+    equities, _ = split_candidate_list_by_instrument()
+    return equities
+
+
+def load_etf_candidate_list_by_sector() -> dict[str, list[str]]:
+    """Return only ETF/benchmark candidates grouped by their configured sector."""
+    _, etfs = split_candidate_list_by_instrument()
+    return etfs
+
+
+def load_equity_candidate_list() -> list[str]:
+    """Return a flat single-name equity candidate list for alpha/PEAD workflows."""
+    grouped = load_equity_candidate_list_by_sector()
+    return sorted({t for tickers in grouped.values() for t in tickers})
+
+
+def load_etf_candidate_list() -> list[str]:
+    """Return a flat ETF/benchmark candidate list for monitoring workflows."""
+    grouped = load_etf_candidate_list_by_sector()
+    return sorted({t for tickers in grouped.values() for t in tickers})
 
 
 def load_research_universe() -> list[str]:
@@ -250,7 +312,7 @@ TICKER_METADATA = {
     "ANET": {"name": "Arista Networks",             "sector": "networking",               "non_us": False},
     "COHR": {"name": "Coherent Corp",               "sector": "networking",               "non_us": False},
     "ASML": {"name": "ASML Holding (ADR)",          "sector": "non_us",                   "non_us": True},
-    "EWY":  {"name": "iShares MSCI South Korea ETF","sector": "non_us",                   "non_us": True},
+    "EWY":  {"name": "iShares MSCI South Korea ETF","sector": "benchmarks",              "non_us": True},
     "SPY":  {"name": "S&P 500 ETF",                 "sector": "benchmarks",               "non_us": False},
     "QQQ":  {"name": "Nasdaq 100 ETF",              "sector": "benchmarks",               "non_us": False},
     "SMH":  {"name": "VanEck Semiconductor ETF",    "sector": "benchmarks",               "non_us": False},

@@ -11,6 +11,9 @@ import pandas as pd
 from quantamental.config.settings import SQLITE_PATH
 
 
+PEAD_SURPRISE_WINSOR_CAP_PCT = 100.0
+
+
 CREATE_EARNINGS_EVENTS = """
 CREATE TABLE IF NOT EXISTS earnings_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,6 +53,30 @@ def _compute_surprise_pct(eps_actual: float | None, eps_estimate: float | None) 
     return (float(eps_actual) - float(eps_estimate)) / abs(float(eps_estimate)) * 100.0
 
 
+def _append_note(notes: str | None, addition: str | None) -> str | None:
+    if not addition:
+        return notes
+    if not notes:
+        return addition
+    if addition in notes:
+        return notes
+    return f"{notes}; {addition}"
+
+
+def winsorize_surprise_pct(
+    surprise_pct: float,
+    *,
+    cap_pct: float = PEAD_SURPRISE_WINSOR_CAP_PCT,
+) -> tuple[float, str | None]:
+    """Cap EPS surprise percent points and return an optional audit note."""
+    value = float(surprise_pct)
+    cap = abs(float(cap_pct))
+    capped = max(min(value, cap), -cap)
+    if capped == value:
+        return value, None
+    return capped, f"raw_surprise_pct={value:.6g}; winsorized_to={capped:.6g}"
+
+
 def log_earnings_event(
     symbol: str,
     report_date: str | date,
@@ -75,6 +102,8 @@ def log_earnings_event(
         surprise_pct = _compute_surprise_pct(eps_actual, eps_estimate)
     if surprise_pct is None:
         raise ValueError("provide surprise_pct or both eps_actual and eps_estimate")
+    surprise_pct, winsor_note = winsorize_surprise_pct(surprise_pct)
+    notes = _append_note(notes, winsor_note)
 
     init_earnings_events(path)
     sql = """

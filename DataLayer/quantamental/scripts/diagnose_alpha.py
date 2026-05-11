@@ -16,7 +16,7 @@ from quantamental.alpha.diagnostics import AlphaDiagnosticReport, build_alpha_di
 from quantamental.alpha.features import load_backtest_inputs_from_questdb
 from quantamental.alpha.performance import build_performance_report
 from quantamental.alpha.reporting import save_alpha_diagnostic_report
-from quantamental.config.universe import load_candidate_list
+from quantamental.config.universe import load_equity_candidate_list
 
 
 def _date_arg(value: str) -> date:
@@ -70,7 +70,7 @@ def main() -> int:
     if not windows:
         parser.error("provide --start/--end or at least one --window START:END")
 
-    symbols = load_candidate_list()
+    symbols = load_equity_candidate_list()
     reports = []
     for start, end in windows:
         inputs = load_backtest_inputs_from_questdb(symbols=symbols, start=start, end=end)

@@ -4,6 +4,7 @@ from plotly.subplots import make_subplots
 import streamlit as st
 from html import escape
 
+from quantamental.config import universe as universe_config
 from quantamental.config.universe import (
     BASE_CANDIDATE_TICKERS,
     BASE_CANDIDATES,
@@ -66,6 +67,86 @@ def _date_text(value) -> str:
         return str(pd.Timestamp(value).date())
     except (TypeError, ValueError):
         return str(value)
+
+
+def _parse_optional_float(value: str):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return float(text)
+
+
+def _fallback_split_candidates_by_instrument() -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    grouped = load_candidate_list_by_sector()
+    known_etfs = set(getattr(universe_config, "KNOWN_ETFS", ())) | {
+        "AIQ",
+        "BOTZ",
+        "EWY",
+        "QQQ",
+        "QQQM",
+        "SMH",
+        "SOXX",
+        "SPY",
+        "XLK",
+    }
+    etf_sectors = set(getattr(universe_config, "ETF_SECTORS", ())) | {
+        "benchmark",
+        "benchmarks",
+        "etf",
+        "etfs",
+        "benchmark_etfs",
+    }
+    equities: dict[str, list[str]] = {}
+    etfs: dict[str, list[str]] = {}
+    for sector, tickers in grouped.items():
+        sector_key = str(sector).strip().lower()
+        equity_tickers = []
+        etf_tickers = []
+        for ticker in tickers:
+            clean = str(ticker).strip().upper()
+            if sector_key in etf_sectors or clean in known_etfs:
+                etf_tickers.append(clean)
+            else:
+                equity_tickers.append(clean)
+        if equity_tickers:
+            equities[sector] = sorted(equity_tickers)
+        if etf_tickers:
+            etfs[sector] = sorted(etf_tickers)
+    return equities, etfs
+
+
+def _equity_candidate_list_by_sector() -> dict[str, list[str]]:
+    loader = getattr(universe_config, "load_equity_candidate_list_by_sector", None)
+    if callable(loader):
+        return loader()
+    equities, _ = _fallback_split_candidates_by_instrument()
+    return equities
+
+
+def _etf_candidate_list_by_sector() -> dict[str, list[str]]:
+    loader = getattr(universe_config, "load_etf_candidate_list_by_sector", None)
+    if callable(loader):
+        return loader()
+    _, etfs = _fallback_split_candidates_by_instrument()
+    return etfs
+
+
+def _instrument_label(symbol: str, sector: str | None = None) -> str:
+    is_etf = getattr(universe_config, "is_etf_symbol", None)
+    if callable(is_etf) and is_etf(symbol, sector):
+        return "ETF"
+    known_etfs = set(getattr(universe_config, "KNOWN_ETFS", ())) | {
+        "AIQ",
+        "BOTZ",
+        "EWY",
+        "QQQ",
+        "QQQM",
+        "SMH",
+        "SOXX",
+        "SPY",
+        "XLK",
+    }
+    return "ETF" if str(symbol).strip().upper() in known_etfs else "Equity"
 
 
 def _freshness_status_style(status: str) -> tuple[str, str]:
@@ -684,7 +765,7 @@ def render_panel_f(sector_df: pd.DataFrame):
 def render_panel_g():
     panel_header("Stock Technicals", "Single-name", "EMA / RSI / volume")
 
-    grouped = load_candidate_list_by_sector()
+    grouped = _equity_candidate_list_by_sector()
     sectors = [s for s, tickers in grouped.items() if tickers]
     if not sectors:
         st.info("No candidates configured. Add some via Panel E.")
@@ -711,6 +792,10 @@ def render_panel_g():
 
     latest = sig_df.iloc[-1]
     composite = int(latest.get("stock_composite", 0) or 0)
+    st.markdown(
+        f"<span class='q-flag q-flag-ok'>Instrument: {_instrument_label(symbol, sector)}</span>",
+        unsafe_allow_html=True,
+    )
 
     tiles = [
         ("ema_signal", "EMA(20/60)"),
@@ -821,11 +906,18 @@ def render_panel_h_alpha(
     ]
     existing = [c for c in display_cols if c in ranks.columns]
     display = ranks[existing].copy()
+    if "symbol" in display:
+        display.insert(
+            display.columns.get_loc("symbol") + 1,
+            "instrument",
+            display["symbol"].map(_instrument_label),
+        )
     if "target_weight" in display:
         display["target_weight"] = display["target_weight"].map(lambda v: f"{float(v):.1%}")
     rename = {
         "rank": "Rank",
         "symbol": "Ticker",
+        "instrument": "Instrument",
         "bucket": "Bucket",
         "alpha_score": "Alpha",
         "target_weight": "Target",
@@ -853,11 +945,53 @@ def render_panel_j_pead_events(events: pd.DataFrame | None = None, asof: str | N
     events = events if events is not None else pd.DataFrame()
     asof_text = asof or pd.Timestamp.today().date().isoformat()
 
-    if events.empty:
-        st.info(
-            "No active PEAD events for this alpha as-of date. Log one with:\n\n"
-            "`python scripts/log_earnings_event.py --symbol TICKER --report-date YYYY-MM-DD --surprise-pct 12.5`"
+    from quantamental.config.settings import SQLITE_PATH
+    from quantamental.signals.earnings import active_pead_events, log_earnings_event
+
+    candidates = sorted({ticker for tickers in _equity_candidate_list_by_sector().values() for ticker in tickers})
+    with st.form("pead_event_form", clear_on_submit=True):
+        st.markdown("**Add PEAD event**")
+        row1 = st.columns([1.1, 1, 1, 1])
+        symbol = row1[0].selectbox("Ticker", candidates, key="pead_symbol")
+        report_date = row1[1].date_input(
+            "Report date",
+            value=pd.Timestamp(asof_text).date(),
+            key="pead_report_date",
         )
+        fiscal_period = row1[2].text_input("Fiscal period", placeholder="2026-Q1")
+        source = row1[3].text_input("Source", value="dashboard")
+
+        row2 = st.columns(3)
+        surprise_text = row2[0].text_input("EPS surprise %", placeholder="12.5")
+        actual_text = row2[1].text_input("EPS actual", placeholder="1.20")
+        estimate_text = row2[2].text_input("EPS estimate", placeholder="1.00")
+        notes = st.text_input("Notes", placeholder="reviewed")
+        submitted = st.form_submit_button("Save PEAD event")
+
+    if submitted:
+        try:
+            surprise_pct = _parse_optional_float(surprise_text)
+            eps_actual = _parse_optional_float(actual_text)
+            eps_estimate = _parse_optional_float(estimate_text)
+            event_id = log_earnings_event(
+                symbol=symbol,
+                report_date=report_date,
+                fiscal_period=fiscal_period.strip() or None,
+                surprise_pct=surprise_pct,
+                eps_actual=eps_actual,
+                eps_estimate=eps_estimate,
+                source=source.strip() or "dashboard",
+                notes=notes.strip() or None,
+                path=SQLITE_PATH,
+            )
+            st.success(f"Saved PEAD event id={event_id} for {symbol}.")
+            st.cache_data.clear()
+            events = active_pead_events(asof=asof_text, symbols=candidates, path=SQLITE_PATH)
+        except ValueError as exc:
+            st.error(str(exc))
+
+    if events.empty:
+        st.info("No active PEAD events for this alpha as-of date.")
         return
 
     events = events.copy()
@@ -912,6 +1046,156 @@ def render_panel_j_pead_events(events: pd.DataFrame | None = None, asof: str | N
 
     styled = display.style.map(pead_style, subset=["PEAD"]) if "PEAD" in display else display
     st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
+def render_panel_k_etfs(latest_prices: dict[str, float] | None = None):
+    panel_header("ETF Monitor", "Benchmarks", "separate from single names")
+    latest_prices = latest_prices or {}
+    grouped = _etf_candidate_list_by_sector()
+    if not grouped:
+        st.info("No ETFs configured. Add ETF tickers to the benchmarks sector in the Universe tab.")
+        return
+
+    rows = []
+    for group, tickers in grouped.items():
+        for ticker in tickers:
+            rows.append(
+                {
+                    "Group": group,
+                    "Ticker": ticker,
+                    "Instrument": _instrument_label(ticker, group),
+                    "Latest price": latest_prices.get(ticker),
+                }
+            )
+    summary = pd.DataFrame(rows)
+    total = len(summary)
+    priced = int(summary["Latest price"].notna().sum()) if not summary.empty else 0
+    cols = st.columns(3)
+    cols[0].metric("ETF instruments", total)
+    cols[1].metric("With latest price", priced)
+    cols[2].metric("Groups", len(grouped))
+
+    display = summary.copy()
+    if "Latest price" in display:
+        display["Latest price"] = display["Latest price"].map(
+            lambda v: "-" if pd.isna(v) else f"${float(v):,.2f}"
+        )
+    st.dataframe(display, use_container_width=True, hide_index=True)
+
+    group_names = [name for name, tickers in grouped.items() if tickers]
+    if not group_names:
+        return
+    col_group, col_ticker = st.columns([1, 1])
+    group = col_group.selectbox("ETF group", group_names, key="panel_k_etf_group")
+    ticker = col_ticker.selectbox("ETF", sorted(grouped[group]), key="panel_k_etf_symbol")
+
+    sig_df = load_stock_signal_history(ticker, days=180)
+    ohlcv_df = load_ohlcv_history(ticker, days=180)
+    if sig_df.empty:
+        st.info(
+            f"No ETF technical signals yet for **{ticker}**. Run "
+            "`python scripts/daily_pipeline.py --step calc_stock_signals`."
+        )
+        return
+
+    latest = sig_df.iloc[-1]
+    st.markdown(
+        f"<span class='q-flag q-flag-watch'>Instrument: {_instrument_label(ticker, group)}</span>",
+        unsafe_allow_html=True,
+    )
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("EMA", f"{int(latest.get('ema_signal', 0) or 0):+d}")
+    metric_cols[1].metric("RSI", f"{int(latest.get('rsi_signal', 0) or 0):+d}")
+    metric_cols[2].metric("Volume", f"{int(latest.get('volume_signal', 0) or 0):+d}")
+    metric_cols[3].metric("Composite", f"{int(latest.get('stock_composite', 0) or 0):+d}")
+
+    fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        row_heights=[0.5, 0.25, 0.25],
+        vertical_spacing=0.04,
+        subplot_titles=("Price & EMA(20/60)", "RSI(14)", "Volume vs 20-day MA"),
+    )
+    if not ohlcv_df.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=ohlcv_df["ts"],
+                y=ohlcv_df["close"],
+                name="Close",
+                mode="lines",
+                line=dict(color=COLOR["info"], width=1.5),
+            ),
+            row=1,
+            col=1,
+        )
+    if "ema_20" in sig_df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=sig_df["ts"],
+                y=sig_df["ema_20"],
+                name="EMA(20)",
+                mode="lines",
+                line=dict(color=COLOR["positive"], width=1.2, dash="dash"),
+            ),
+            row=1,
+            col=1,
+        )
+    if "ema_60" in sig_df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=sig_df["ts"],
+                y=sig_df["ema_60"],
+                name="EMA(60)",
+                mode="lines",
+                line=dict(color=COLOR["negative"], width=1.2, dash="dot"),
+            ),
+            row=1,
+            col=1,
+        )
+    if "rsi_14" in sig_df.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=sig_df["ts"],
+                y=sig_df["rsi_14"],
+                name="RSI(14)",
+                mode="lines",
+                line=dict(color=COLOR["info"], width=1.5),
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+        fig.add_hline(y=70, line=dict(color=COLOR["negative"], width=1, dash="dash"), row=2, col=1)
+        fig.add_hline(y=30, line=dict(color=COLOR["positive"], width=1, dash="dash"), row=2, col=1)
+        fig.update_yaxes(range=[0, 100], row=2, col=1)
+    if not ohlcv_df.empty and "volume" in ohlcv_df.columns:
+        fig.add_trace(
+            go.Bar(
+                x=ohlcv_df["ts"],
+                y=ohlcv_df["volume"],
+                name="Volume",
+                marker=dict(color=COLOR["inactive"]),
+                showlegend=False,
+            ),
+            row=3,
+            col=1,
+        )
+        vol_ma = ohlcv_df["volume"].rolling(20).mean()
+        fig.add_trace(
+            go.Scatter(
+                x=ohlcv_df["ts"],
+                y=vol_ma,
+                name="Vol MA(20)",
+                mode="lines",
+                line=dict(color=COLOR["info"], width=1.5),
+                showlegend=False,
+            ),
+            row=3,
+            col=1,
+        )
+    style_plot(fig, height=620, showlegend=True)
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_panel_i_alpha_validation(performance: dict[str, pd.DataFrame] | None = None):

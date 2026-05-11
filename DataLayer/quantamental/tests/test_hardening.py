@@ -122,6 +122,8 @@ def test_package_entrypoints_are_declared_and_importable():
         "quantamental-alpha-performance": "quantamental.scripts.alpha_performance:main",
         "quantamental-diagnose-alpha": "quantamental.scripts.diagnose_alpha:main",
         "quantamental-log-earnings-event": "quantamental.scripts.log_earnings_event:main",
+        "quantamental-import-earnings-events": "quantamental.scripts.import_earnings_events:main",
+        "quantamental-import-earnings-events-csv": "quantamental.scripts.import_earnings_events_csv:main",
     }
     assert scripts == expected
 

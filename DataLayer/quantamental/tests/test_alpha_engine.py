@@ -308,16 +308,18 @@ def test_disabled_components_are_tracked_but_not_scored_in_v1():
     ranks = rank_alpha(
         pd.DataFrame(
             [
-                {"symbol": "LOW", "volatility_20": 0.10, "rsi_signal": -2},
-                {"symbol": "HIGH", "volatility_20": 1.00, "rsi_signal": 2},
+                {"symbol": "LOW", "volatility_20": 0.10, "rsi_signal": -2, "pead_signal": -2},
+                {"symbol": "HIGH", "volatility_20": 1.00, "rsi_signal": 2, "pead_signal": 2},
             ]
         )
     )
 
     assert "volatility_20_component" in ranks.columns
     assert "rsi_signal_component" in ranks.columns
+    assert "pead_signal_component" in ranks.columns
     assert ranks["volatility_20_component"].abs().sum() == 0
     assert ranks["rsi_signal_component"].abs().sum() == 0
+    assert ranks["pead_signal_component"].abs().sum() == 0
     assert ranks["alpha_score"].nunique() == 1
 
 

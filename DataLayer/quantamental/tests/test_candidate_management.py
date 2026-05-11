@@ -112,3 +112,32 @@ class TestBackwardsCompatibility:
         u = isolated_config["module"]
         assert "SPY" in u.BENCHMARKS
         assert "QQQ" in u.BENCHMARKS
+
+    def test_splits_equities_and_etfs(self, isolated_config):
+        u = isolated_config["module"]
+        isolated_config["candidate"].write_text(
+            json.dumps(
+                {
+                    "sectors": {
+                        "upstream_compute": ["NVDA", "AMD"],
+                        "benchmarks": ["SPY", "QQQ", "SMH"],
+                        "non_us": ["EWY", "ASML"],
+                    }
+                }
+            )
+        )
+
+        equities = u.load_equity_candidate_list()
+        etfs = u.load_etf_candidate_list()
+
+        assert equities == ["AMD", "ASML", "NVDA"]
+        assert etfs == ["EWY", "QQQ", "SMH", "SPY"]
+        assert not set(equities) & set(etfs)
+
+    def test_instrument_classifier_labels_etfs(self, isolated_config):
+        u = isolated_config["module"]
+
+        assert u.is_etf_symbol("SMH")
+        assert u.is_etf_symbol("EWY", "non_us")
+        assert u.is_etf_symbol("NVDA", "benchmarks")
+        assert not u.is_etf_symbol("NVDA", "upstream_compute")

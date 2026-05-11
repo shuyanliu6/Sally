@@ -36,6 +36,7 @@ from quantamental.dashboard.panels import (
     render_panel_h_alpha,
     render_panel_i_alpha_validation,
     render_panel_j_pead_events,
+    render_panel_k_etfs,
     render_portfolio_risk,
     render_dashboard_clock,
     render_data_freshness_gate,
@@ -83,8 +84,8 @@ def main():
 
     render_dashboard_clock(freshness)
 
-    overview_tab, alpha_tab, signals_tab, portfolio_tab, universe_tab = st.tabs(
-        ["Overview", "Alpha", "Signals", "Portfolio", "Universe"]
+    overview_tab, alpha_tab, signals_tab, etf_tab, portfolio_tab, universe_tab = st.tabs(
+        ["Overview", "Alpha", "Signals", "ETFs", "Portfolio", "Universe"]
     )
 
     with overview_tab:
@@ -101,6 +102,9 @@ def main():
         render_panel_f(sector_df)
         render_panel_g()
         render_panel_d(signals_df)
+
+    with etf_tab:
+        render_panel_k_etfs(latest_prices)
 
     with portfolio_tab:
         render_portfolio_risk(alpha_ranks, positions_df, latest_prices)

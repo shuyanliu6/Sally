@@ -184,8 +184,81 @@ python scripts/diagnose_alpha.py \
   --window 2025-07-01:2026-04-01
 ```
 
-PEAD uses manually logged EPS surprise events from SQLite. Log surprises in
-percent points, then rerun stock signals or alpha diagnostics:
+PEAD uses EPS surprise events from SQLite. Import recent earnings events in
+the dashboard Alpha tab, or import recent earnings events in review mode first
+and commit only after the rows look right.
+
+Dashboard entry:
+
+1. Open the Alpha tab.
+2. In `PEAD Events`, enter ticker, report date, surprise percentage or EPS
+   actual/estimate, source, and notes.
+3. Save the event, then rerun stock signals/alpha so the ranker can consume it.
+
+ETFs and benchmarks are separated from single-name equities. The Alpha and PEAD
+workflows use the single-name equity list by default; ETF instruments are shown
+in their own dashboard tab.
+
+Command-line import:
+
+```bash
+python scripts/import_earnings_events.py \
+  --tickers NVDA AMD MSFT \
+  --from 2026-04-01 \
+  --to 2026-05-09
+
+python scripts/import_earnings_events.py \
+  --tickers NVDA AMD MSFT \
+  --from 2026-04-01 \
+  --to 2026-05-09 \
+  --commit
+```
+
+To try Financial Modeling Prep instead of yfinance, add `FMP_API_KEY` to
+`quantamental/config/.env`, then run the same importer with `--provider fmp`:
+
+```bash
+python scripts/import_earnings_events.py \
+  --provider fmp \
+  --tickers NVDA AMD MSFT \
+  --from 2026-04-01 \
+  --to 2026-05-09
+
+python scripts/import_earnings_events.py \
+  --provider fmp \
+  --tickers NVDA AMD MSFT \
+  --from 2026-04-01 \
+  --to 2026-05-09 \
+  --commit
+```
+
+Without `--tickers`, the importer scans the active candidate list. The default
+mode writes nothing; `--commit` upserts reviewable `READY` rows into
+`earnings_events`. Existing symbol/report-date rows are preserved unless you
+also pass `--overwrite`.
+
+PEAD surprise values are winsorized at ±100 percentage points before storage.
+If a provider returns an extreme value, for example from a tiny EPS estimate,
+the stored `surprise_pct` is capped and the raw value is preserved in `notes`.
+PEAD is currently **observe-only** in the V1 alpha book: events are collected
+and displayed, but `pead_signal` has zero direct alpha weight until source
+quality is validated.
+
+If yfinance rate-limits, use a reviewed CSV instead:
+
+```csv
+symbol,report_date,fiscal_period,eps_actual,eps_estimate,surprise_pct,source,notes
+NVDA,2026-05-01,2026-Q1,1.20,1.00,,manual_csv,reviewed
+AMD,2026-05-06,2026-Q1,,,6.25,manual_csv,reviewed
+```
+
+```bash
+python scripts/import_earnings_events_csv.py --file earnings.csv
+python scripts/import_earnings_events_csv.py --file earnings.csv --commit
+```
+
+You can still log surprises manually in percent points, then rerun stock
+signals or alpha diagnostics:
 
 ```bash
 python scripts/log_earnings_event.py \
