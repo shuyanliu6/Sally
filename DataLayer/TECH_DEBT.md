@@ -1,496 +1,1198 @@
-# Tech Debt Log
+# Quantamental Tech Debt And Hardening Roadmap
 
-> Defects identified in the Apr 25 2026 system audit. **HIGH-priority items (D1, D2, D3) have been fixed.** This file tracks the remaining MEDIUM and LOW items so they can be picked up later. Each entry is self-contained — when you come back, you can implement any item without re-reading the whole codebase.
+Last reviewed: 2026-05-11
 
-**Status legend**: 🔴 not started · 🟡 in progress · 🟢 fixed
-**Priority**: 🟠 MEDIUM (spec compliance / robustness) · 🟢 LOW (quality of life)
+This file is the current hardening backlog for the quantamental AI-infra
+research system. It combines the existing project audit with the latest
+system-review report.
 
----
+Important scope: this is a **single-operator research / decision-support
+system**. Trades are executed manually. Therefore the main failure mode is not
+an accidental automated order; it is a wrong or stale number causing a wrong
+human decision.
 
-## 🟠 D11 — Automate earnings event import for PEAD
+The project is useful today as a research console. It is not yet a reliable
+alpha engine. The next work should improve research integrity, dashboard
+truthfulness, and validation quality before adding more factors.
 
-**Status**: 🟢 fixed
-**Severity**: MEDIUM
-**Files**: `quantamental/scripts/import_earnings_events.py`, `quantamental/signals/earnings.py`
+## Severity
 
-### Problem
-PEAD now works when earnings events are manually logged into SQLite, but the
-operator still has to look up EPS actual, EPS estimate, report date, and
-surprise percentage by hand. Manual loading is acceptable for testing, but it
-does not scale across the AI-infra candidate universe during earnings season.
+- 🔴 Critical: silently misleads research or invalidates backtests
+- 🟠 High: correctness / integrity / trust issue
+- 🟡 Medium: operational reliability or dashboard clarity
+- 🟢 Low: hygiene, maintainability, polish
 
-### Fix
-Added `scripts/import_earnings_events.py` backed by
-`quantamental.signals.earnings_importer`. The importer:
+## Status
 
-- sources first-pass data from `yfinance`;
-- supports Financial Modeling Prep through `--provider fmp` and `FMP_API_KEY`;
-- supports `--tickers`, `--from`, `--to`, `--commit`, and `--overwrite`;
-- defaults to dry-run review mode;
-- imports only rows with report date and either explicit surprise percentage or
-  both reported EPS and estimated EPS;
-- preserves existing manual rows unless `--overwrite` is passed;
-- prints a review report with written, skipped, existing, no-event, and fetch
-  error statuses.
-- adds `scripts/import_earnings_events_csv.py` as a deterministic fallback when
-  yfinance rate-limits.
-
-### Acceptance
-- Default mode prints events without mutating SQLite.
-- Re-running the importer is idempotent.
-- Manually corrected rows are not overwritten unless `--overwrite` is passed.
-- After import, `python scripts/diagnose_alpha.py --window ...` shows PEAD with
-  active rank dates instead of `NO_VARIATION`.
-
-### Estimated effort
-2–4 hours
+- 🔴 not started
+- 🟡 partial / in progress
+- 👀 observe-only
+- 🟢 fixed / accepted
 
 ---
 
-## 🟠 D4 — `validate_ohlcv` only warns, doesn't filter or persist flags
+## Executive Summary
+
+### What Is Working
+
+- The project has a coherent pipeline: OHLCV, macro, sector, stock signals,
+  alpha ranks, portfolio monitor, and dashboard.
+- Freshness guardrails exist.
+- ETFs/benchmarks are separated from single-name equities.
+- PEAD is collected and displayed, but no longer affects alpha ranking.
+- FMP/yfinance/CSV/manual earnings importers are review-first and idempotent.
+- The test suite is broad and currently healthy; latest user run showed
+  `274 passed`.
+
+### What Is Not Reliable Enough Yet
+
+- Backtests are not yet believable enough for capital-allocation confidence.
+- A few point-in-time and survivorship edges can inflate measured alpha.
+- Dashboard truthfulness is incomplete: some tabs can still show stale values
+  without a strong banner or explicit as-of timestamp.
+- Several code paths convert broken/missing data into neutral-looking zeros.
+- Manual or provider-sourced signals can become stale or disagree without a
+  review workflow.
+- Active factor weights are still heuristic rather than validation-gated.
+
+### Recommended Fix Order
+
+1. Dashboard truthfulness: global freshness banner and as-of timestamps.
+2. Research-integrity blockers: leakage, costs, delistings, walk-forward tests.
+3. Data-quality auditability: persistent OHLCV warnings and missing-price flags.
+4. Dead-signal visibility: distinguish neutral from broken.
+5. PEAD source governance before any future reactivation.
+6. Dashboard workflow separation.
+7. Operational hygiene and cleanup.
+
+---
+
+# 🔴 Critical — Research Integrity And Dashboard Truthfulness
+
+## D1 — PEAD Cutoff Can Leak Same-Day Earnings Prints
 
 **Status**: 🔴 not started
-**Severity**: MEDIUM
-**Files**: `quantamental/data/ingest/polygon_client.py`
+**Files**: `quantamental/alpha/features.py`,
+`quantamental/signals/stock.py`, `quantamental/tests/test_alpha_engine.py`
 
 ### Problem
-Spec §9.1 says "flag any daily returns exceeding 20% for manual review." The current `validate_ohlcv()` function logs a warning but **still writes the bad row to QuestDB**. There is no record of which rows were flagged, so manual review is impossible after the fact.
 
-### Current behavior
-```python
-def validate_ohlcv(df):
-    suspicious = df[df["daily_return"].abs() > 0.20]
-    if not suspicious.empty:
-        logger.warning("Suspicious returns detected:\n%s", suspicious)
-    return df.drop(columns=["prev_close", "daily_return"])  # returns ALL rows
-```
+Earnings often print after market close. If a PEAD event with `report_date = T`
+is allowed into features for `asof = T`, a backtest or intraday run may use
+information that was not tradable at the signal time.
 
-### Proposed fix
-1. Add a new QuestDB table `data_quality_warnings(ts, symbol, return_pct, action)`
-2. Make `validate_ohlcv` return `(clean_df, flagged_df)` tuple
-3. Persist flagged rows to the new table for review
-4. Decision: keep writing to `daily_ohlcv` anyway (data is real), but include a flag column or sidecar
+PEAD is currently observe-only in alpha scoring, but the leakage should still
+be fixed before PEAD is evaluated or reactivated.
 
-### Acceptance
-- Re-running pipeline with a known synthetic >20% move shows up in `data_quality_warnings`
-- Daily check (`scripts/check_data.py`) surfaces flagged rows in its report
+### Proposed Fix
 
-### Estimated effort
-1–2 hours
+Use a strict availability rule:
 
----
+- either `event_date < asof_date`;
+- or better, `event_available_session <= asof_session`, where after-close
+  events become available on the next trading day.
 
-## 🟠 D5 — 2-day regime confirmation NOT implemented (spec violation)
+Add a test with an earnings event on day `T`:
 
-**Status**: 🔴 not started
-**Severity**: MEDIUM
-**Files**: `quantamental/signals/aggregator.py`, `quantamental/data/ingest/questdb_writer.py`
-
-### Problem
-Spec §10 explicitly mitigates "Signal false positive" risk with: "Require 2+ consecutive days of new regime before acting." This is **not implemented anywhere**. A 1-day regime flip from `RISK_ON` to `RISK_OFF` would trigger Panel A's red badge and influence trading immediately.
-
-### Current behavior
-`run_and_store()` in `signals/aggregator.py` writes `regime` directly from today's composite score. No memory of yesterday.
-
-### Proposed fix
-1. Add `confirmed_regime STRING` column to `regime_signals` table (schema migration)
-2. In `run_and_store()`, after computing `regime`:
-   - Read yesterday's `regime` from DB
-   - If today's `regime == yesterday's regime`: `confirmed_regime = today's regime`
-   - Else: `confirmed_regime = yesterday's confirmed_regime` (carry forward)
-3. Update dashboard Panel A to display `confirmed_regime`, with a small badge "(unconfirmed: NEW_REGIME)" when they differ
-4. Update `check_data.py` to surface unconfirmed regime changes
-
-### Schema change
-```sql
-ALTER TABLE regime_signals ADD COLUMN confirmed_regime STRING;
-```
-Or recreate the table with the column included if there's no production data worth preserving yet.
+- `asof=T` should not see the event;
+- `asof=T+1 trading day` should see it.
 
 ### Acceptance
-- Insert 2 synthetic days of `RISK_ON` followed by 1 day of `RISK_OFF` — `confirmed_regime` should still read `RISK_ON`
-- A second day of `RISK_OFF` flips `confirmed_regime` to `RISK_OFF`
-- Tests in `tests/test_signals.py` cover this transition
 
-### Estimated effort
-2–3 hours (includes schema migration + dashboard update + tests)
+- Synthetic same-day earnings event is excluded from `asof=T` features.
+- Dashboard PEAD panel can still display the event separately as reported data.
 
----
+### Effort
 
-## 🟠 D6 — FRED client refetches full history every run
-
-**Status**: 🟡 partially mitigated (D1 fix added 90-day cap)
-**Severity**: MEDIUM (downgraded after D1)
-**Files**: `quantamental/data/ingest/fred_client.py`, `quantamental/scripts/daily_pipeline.py`
-
-### Problem (original)
-`fetch_all_macro()` was called with no bounds, pulling years of FRED history every day. Combined with the original `write_macro` (no dedup), this caused row duplication.
-
-### Current state
-- D1 fixed the duplication issue at the writer level
-- D1 efficiency fix added: pipeline now passes `start=date.today() - 90 days` to FRED for `fetch_macro`, and `start=date.today() - 365 days` for `calc_signals`
-- **Remaining issue**: FRED's `fetch_series` still does no incremental tracking — just respects whatever bounds the caller passes
-
-### What's still wrong
-The FRED client should track its own `last_fetched_ts` per series and only request observations newer than that. Right now if you run the pipeline twice in a day, both runs pull the same 90 days from FRED (only the WRITE is deduped).
-
-### Proposed fix
-1. Add `last_fetched_at` SQLite metadata table (or use existing meta.db)
-2. `fetch_series(series_id)` defaults to `start = last_fetched_at(series_id) - 1 day` (small overlap for safety)
-3. Update `last_fetched_at(series_id)` after successful fetch
-
-### Acceptance
-- Run pipeline at 5pm, then 5:30pm — FRED API calls in the second run should fetch only the few hours of new data (in practice 0 new observations)
-- Log line shows "FRED yield_10y: fetched 0 new observations"
-
-### Estimated effort
 1 hour
 
 ---
 
-## 🟠 D7 — Stop-loss alerts not deduplicated
+## D2 — Backtest Is Not Yet Fund-Manager Grade
 
 **Status**: 🔴 not started
-**Severity**: MEDIUM
-**Files**: `quantamental/portfolio/stoploss.py`, `quantamental/portfolio/tracker.py` (SQLite schema)
+**Files**: `quantamental/alpha/backtest.py`,
+`quantamental/alpha/performance.py`, `quantamental/alpha/diagnostics.py`,
+`quantamental/scripts/backtest_alpha.py`,
+`quantamental/scripts/alpha_performance.py`
 
 ### Problem
-A position stuck just above its stop-loss for a week generates 7 identical Telegram alerts. Spammy and conditions the user to ignore them.
 
-### Proposed fix
-1. Add SQLite table `stop_loss_alerts(symbol, ts, distance_pct, sent)`
-2. In `check_stops()`:
-   - Before sending an alert, check the last alert for that symbol
-   - Suppress if same alert within last 24h, **unless** `distance_pct` worsened (e.g. dropped from 4% to 2%, or breached)
-3. Always log to console; only Telegram is rate-limited
+The current backtest is useful for smoke testing, but not enough to trust an
+alpha engine:
+
+- no true walk-forward parameter selection;
+- no train/validate/out-of-sample split;
+- factor weights are hand-set, not selected on prior windows;
+- `avg_holding_period_days` is hard-coded;
+- turnover is not analyzed by rebalance/name;
+- performance is not conditioned by macro/sector regime;
+- backtest reports should be treated as upper bounds until leakage,
+  survivorship, and cost-reporting consistency issues are fixed.
+
+### Proposed Fix
+
+1. Add a walk-forward CLI that sweeps rolling windows and reports IC
+   distribution, not a single number.
+2. Add factor ablation:
+   - baseline;
+   - baseline + factor;
+   - rank IC delta;
+   - bucket-spread delta;
+   - drawdown / turnover impact.
+3. Measure holding period from actual entry/exit dates.
+4. Report performance by regime.
+5. Add a PASS / WATCH / FAIL validation status consumed by the dashboard.
 
 ### Acceptance
-- Synthetic position 4% above stop → first run sends alert, second run silent
-- Drop synthetic price so position is now 1% above stop → alert fires again (worsening)
-- Re-run with no price change → silent
 
-### Estimated effort
-1–2 hours
+- Backtest output includes measured holding period, turnover by rebalance, and
+  walk-forward windows.
+- Alpha Validation dashboard shows whether the current alpha book is supported
+  by validation.
+- Fixed-seed / fixed-data backtest output is reproducible.
+
+### Effort
+
+4-8 hours
 
 ---
 
-## 🟢 D8 — `score_yield` uses absolute level thresholds (era-specific)
+## D3 — Transaction Costs Need Shared Configuration And Clear Reporting
+
+**Status**: 🟡 partial / in progress
+**Files**: `quantamental/alpha/backtest.py`,
+`quantamental/alpha/performance.py`,
+`quantamental/config/settings.py`
+
+### Problem
+
+Backtest strategy returns already include a `transaction_cost_bps` parameter,
+and tests cover that costs reduce returns. The remaining issue is consistency:
+the cost assumption is not centralized, and dashboard / performance reports do
+not clearly label whether the validation view is gross or net of costs.
+
+Month-2 assumptions call for realistic slippage/impact. Weekly rebalancing
+across 8-12 names can make gross alpha look better than it is, so the user
+should never have to infer which cost model a validation number uses.
+
+### Proposed Fix
+
+Add one shared setting, for example:
+
+```python
+TXN_COST_BPS_ROUNDTRIP = 20.0
+```
+
+Use it consistently in:
+
+- backtest returns;
+- alpha performance;
+- dashboard validation summary.
+
+### Acceptance
+
+- Backtest A vs backtest A plus cost shows return drop of roughly
+  `turnover * cost`.
+- Dashboard validation explicitly says gross or net.
+
+### Effort
+
+1-2 hours
+
+---
+
+## D4 — Delistings / Disappearing Names Bias Backtests
 
 **Status**: 🔴 not started
-**Severity**: LOW
-**Files**: `quantamental/signals/macro.py`, `quantamental/config/settings.py`
+**Files**: `quantamental/alpha/features.py`,
+`quantamental/alpha/backtest.py`,
+`quantamental/research/universe_builder.py`
 
 ### Problem
-Hard-coded thresholds in `settings.py`:
-```python
-YIELD_STRONG_BULL_THRESHOLD = 4.0   # yield < 4% → strong bull
-YIELD_STRONG_BEAR_THRESHOLD = 5.0   # yield > 5% → strong bear
-```
 
-In 2010, a 4% yield was elevated. In 2024, it's the new normal. These thresholds will misclassify across rate regimes.
+If a name delists or disappears from OHLCV/stock-signal coverage, it can vanish
+from the feature/pivot universe. In historical testing this avoids realizing
+losses and compounds survivorship bias.
 
-### Proposed fix
-Replace absolute thresholds with rolling percentiles:
-- `Strong bullish`: 20MA below 60MA AND yield in bottom 25th percentile of last 5 years
-- `Strong bearish`: 20MA above 60MA AND yield in top 25th percentile of last 5 years
+This is related to point-in-time universe construction, but specifically covers
+how delisted names are carried through portfolio exit.
 
-### Implementation
-```python
-def score_yield(df: pd.DataFrame) -> int:
-    series = df["value"].dropna()
-    if len(series) < 252 * 5:  # need ~5 years for percentile
-        # fallback to current absolute logic
-        return _score_yield_absolute(df)
+### Proposed Fix
 
-    ma_fast = series.rolling(20).mean().iloc[-1]
-    ma_slow = series.rolling(60).mean().iloc[-1]
-    latest = series.iloc[-1]
-    p25 = series.tail(252 * 5).quantile(0.25)
-    p75 = series.tail(252 * 5).quantile(0.75)
-
-    if abs(ma_fast - ma_slow) <= YIELD_NEUTRAL_BAND_BPS: return 0
-    if ma_fast < ma_slow: return 2 if latest < p25 else 1
-    return -2 if latest > p75 else -1
-```
+1. Build a backtest universe with active periods.
+2. Carry delisted names until the next rebalance.
+3. Apply final-price floor or explicit delisting return policy.
+4. Document the policy in every backtest report.
 
 ### Acceptance
-- Existing absolute-threshold tests still pass with synthetic short data
-- New test: synthetic 5-year series at consistently elevated levels — strong bear NOT triggered just because yield is "high"
 
-### Estimated effort
-1–2 hours
+- Synthetic delisting mid-window remains in the portfolio until exit logic
+  realizes the loss.
+- Backtest report states how delistings were handled.
+
+### Effort
+
+3-5 hours for Tier 1 implementation
 
 ---
 
-## 🟢 D9 — `query()` SQL with literal `%` will fail
+## D5 — Dashboard Freshness Gate Is Not Global Enough
 
 **Status**: 🔴 not started
-**Severity**: LOW
-**Files**: `quantamental/data/ingest/questdb_writer.py`
+**Files**: `quantamental/dashboard/app.py`,
+`quantamental/dashboard/freshness.py`,
+`quantamental/dashboard/panels.py`
 
 ### Problem
-SQLAlchemy's `text(sql)` interprets `%` as a parameter marker. Any query like:
-```python
-query("SELECT * FROM daily_ohlcv WHERE symbol LIKE 'NV%'")  # would error
-```
-will raise `tuple index out of range` or similar at execution time.
 
-### Current code
-```python
-def query(sql: str) -> pd.DataFrame:
-    engine = _get_engine()
-    with engine.connect() as conn:
-        return pd.read_sql_query(text(sql), conn)
-```
+Freshness gating currently exists, but the dashboard can still show important
+numbers outside the Alpha tab without a strong global warning. Overview,
+Portfolio, ETF, and Signals views can appear authoritative even when the
+underlying data is stale or blocked.
 
-### Proposed fix
-Two options:
-1. Auto-escape `%` → `%%` before passing to `text()`
-2. Use `sqlalchemy.text(sql).execution_options(compiled_cache=None)` and bind parameters explicitly via `:param` placeholders, with an optional `params: dict` argument
+### Proposed Fix
 
-Recommended: option 2 (better hygiene, prevents SQL injection if anyone ever uses dynamic input).
+1. Render freshness status at the top of every tab.
+2. If freshness is `BLOCKED`, visually mark all decision/rank/portfolio panels
+   as not trusted.
+3. Keep research/data-ops panels visible, but clearly label the data state.
 
 ### Acceptance
-- Add a test: `query("SELECT 'hello%' AS s")` should return one row with `s = 'hello%'`
-- Add a test for parameterized usage: `query("SELECT * FROM x WHERE symbol = :sym", params={"sym": "NVDA"})`
 
-### Estimated effort
-30 min
+- Force freshness `BLOCKED` in a test and assert all tabs render a warning.
+- No rank/price/portfolio panel appears without a trust state.
+
+### Effort
+
+1-2 hours
 
 ---
 
-## 🟢 D10 — Pipeline state file uses local-time `date.today()` not market time
+## D6 — No As-Of Timestamp On Many Dashboard Values
 
 **Status**: 🔴 not started
-**Severity**: LOW
-**Files**: `quantamental/scripts/daily_pipeline.py`
+**Files**: `quantamental/dashboard/panels.py`,
+`quantamental/dashboard/data.py`, `quantamental/alpha/reporting.py`
 
 ### Problem
-`_state_path()` uses `date.today()`, which is system-local. If the user is in Europe and runs the pipeline at 11pm UTC, the state file is named after "today" while the NYSE-relevant trading day is yesterday.
 
-### Current code
-```python
-def _state_path() -> Path:
-    return Path(PIPELINE_LOG_PATH).parent / f"pipeline_state_{date.today()}.json"
-```
+The dashboard shows prices, ranks, signals, and portfolio values without
+consistently stating:
 
-### Proposed fix
-```python
-from zoneinfo import ZoneInfo
-from datetime import datetime
+- price as-of time;
+- alpha-rank as-of date;
+- signal calculation date;
+- fetch time of cached dashboard data.
 
-def _market_today() -> date:
-    """The current trading day in NYSE local time."""
-    return datetime.now(ZoneInfo("America/New_York")).date()
+For a manual research system, this is one of the cheapest and highest-value
+truthfulness improvements.
 
-def _state_path() -> Path:
-    return Path(PIPELINE_LOG_PATH).parent / f"pipeline_state_{_market_today()}.json"
+### Proposed Fix
+
+Add panel-level as-of lines:
+
+```text
+Prices as of 2026-05-09 16:00 ET · Alpha computed 2026-05-10 09:42 China
 ```
 
 ### Acceptance
-- Mock `datetime.now` to a UK 11pm UTC time → `_market_today()` returns the previous calendar day
-- Existing tests still pass (they pass tmp_path explicitly, bypassing this function)
 
-### Estimated effort
-30 min
+- Alpha Book, Overview, Portfolio, Signals, and ETF panels show as-of metadata.
+- Dashboard cached fetch time is visible in the freshness panel.
+
+### Effort
+
+1-2 hours
 
 ---
 
-## 🟢 D11 — `compute_pnl` propagates NaN if a price is missing
+## D7 — Position PnL Can Under-Report When Prices Are Missing
 
 **Status**: 🔴 not started
-**Severity**: LOW
-**Files**: `quantamental/portfolio/tracker.py`
+**Files**: `quantamental/portfolio/tracker.py`,
+`quantamental/dashboard/panels.py`, `quantamental/tests/test_portfolio.py`
 
 ### Problem
-```python
-df["current_price"] = df["symbol"].map(latest_prices)
-df["market_value"] = df["current_price"] * df["shares"]
-```
-If a symbol isn't in `latest_prices` (e.g. data fetch failed for that ticker), `current_price` is NaN, `market_value` is NaN, and the row silently shows blank P&L on the dashboard. Total P&L summary may also be wrong because NaN propagates through `df["pnl"].sum()` (pandas `sum()` skips NaN by default but the ROW shows blank).
 
-### Proposed fix
-1. Detect missing prices explicitly
-2. Log a `WARNING` per missing symbol
-3. Either skip the row in totals OR use `entry_price` as a fallback (with clear flag)
-4. Dashboard Panel B should visually mark NaN rows
+If a held position is missing a latest price, PnL rows can become NaN. Pandas
+can skip NaNs in totals, causing the dashboard total to under-report or look
+cleaner than reality.
 
-### Implementation sketch
-```python
-def compute_pnl(positions_df, latest_prices):
-    if positions_df.empty:
-        return positions_df
-    df = positions_df.copy()
-    df["current_price"] = df["symbol"].map(latest_prices)
+### Proposed Fix
 
-    missing = df[df["current_price"].isna()]
-    if not missing.empty:
-        logger.warning("compute_pnl: missing prices for %s", list(missing["symbol"]))
-        df["price_status"] = df["current_price"].apply(lambda x: "OK" if pd.notna(x) else "MISSING")
-
-    # ... rest unchanged
-    return df
-```
+1. Add `price_status` to PnL rows:
+   - `OK`;
+   - `MISSING`;
+   - `STALE`.
+2. Style missing rows in red/amber.
+3. Refuse to show a portfolio-level PnL total unless all open positions are
+   priced, or show a prominent partial-total label.
 
 ### Acceptance
-- Test: positions with NVDA + MSFT, prices dict has only NVDA → log warning, NVDA row shows P&L, MSFT row shows MISSING
 
-### Estimated effort
-30 min
+- Missing MSFT price with NVDA present shows NVDA row, MSFT `MISSING`, and no
+  clean portfolio total.
+
+### Effort
+
+1 hour
 
 ---
 
-## 🟠 D12 — Research universe has survivorship + look-ahead bias (BLOCKER for backtesting)
+# 🟠 High — Alpha And Signal Correctness
+
+## D8 — Dead / Degenerate Components Look Like Healthy Neutral Signals
 
 **Status**: 🔴 not started
-**Severity**: MEDIUM (HIGH if/when backtesting begins)
-**Files**: `quantamental/research/universe_builder.py`, `quantamental/data/ingest/polygon_client.py`, `quantamental/scripts/build_universe.py`
+**Files**: `quantamental/alpha/ranking.py`,
+`quantamental/alpha/diagnostics.py`, `quantamental/dashboard/panels.py`
 
 ### Problem
-`research/universe_builder.py:fetch_sp1500_from_wikipedia()` returns the **current** S&P 1500 constituents only. When applied retroactively to past data (e.g. for a 2024–2026 backtest), this introduces two compounding biases:
 
-1. **Survivorship bias** — companies that were delisted, acquired, or removed from the index are missing entirely. Real examples in the 2024–2026 window: WBA, AAP, FRC, SIVB. A backtest never "sees" these failures, inflating measured strategy returns.
-2. **Look-ahead bias** — using membership-as-of-today to define the universe-as-of-2024 means we're using future knowledge that "these companies survived to 2026." A real-time strategy in 2024 wouldn't have known.
+`_percentile_component()` returns `0.0` when a component has insufficient data
+or no variation. But `0.0` is also the expected value for a healthy neutral
+factor. Downstream code cannot tell the difference between:
 
-**Magnitude**: typically inflates 2-year backtest returns by 1–4% annually for equity strategies; worse for small-cap (S&P 600 turnover) and volatility-chasing strategies.
+- a factor that is neutral;
+- a factor that is dead;
+- a factor that has no usable data.
 
-**Why it's not blocking now**: live trading and current research only need today's universe (which Wikipedia provides correctly). Backtesting is the issue, and backtesting is **Month 2** per spec §11. So this is queued but not urgent.
+### Proposed Fix
 
-### Tiered solutions (pick one when Month 2 starts)
+For each component, add state:
 
-#### Tier 1 — Free, ~80% bias eliminated (recommended)
-Use Polygon's reference data to pull both active AND delisted US common stocks for the backtest window:
-
-```python
-# In universe_builder.py
-def fetch_polygon_active_and_delisted(start_date: date) -> pd.DataFrame:
-    """Pull all US common stocks that were active at any point since start_date.
-
-    Includes currently-active stocks PLUS stocks delisted after start_date.
-    Catches bankruptcies, mergers, delistings during the window.
-    """
-    from polygon import RESTClient
-    from config.settings import POLYGON_API_KEY
-    client = RESTClient(api_key=POLYGON_API_KEY)
-    records = []
-
-    # Active common stocks
-    for t in client.list_tickers(market="stocks", active=True, type="CS", limit=1000):
-        records.append({"symbol": t.ticker, "active": True, "delisted_utc": None})
-
-    # Delisted common stocks
-    for t in client.list_tickers(market="stocks", active=False, type="CS", limit=1000):
-        delisted = getattr(t, "delisted_utc", None)
-        if delisted and pd.Timestamp(delisted).date() >= start_date:
-            records.append({"symbol": t.ticker, "active": False, "delisted_utc": delisted})
-
-    return pd.DataFrame(records).drop_duplicates(subset="symbol")
+```text
+OK
+NO_VARIATION
+INSUFFICIENT_DATA
+MISSING
 ```
 
-What this catches: bankruptcies, mergers, delistings within the backtest window
-What this misses: index membership changes (stock outside S&P 500 in 2024 but in it in 2026 is treated as always-in)
+Surface this in:
 
-Cost: 0
-Effort: 2–3 hours
-
-#### Tier 2 — Paid, comprehensive ($50–300/yr)
-| Source | Cost/yr | What you get |
-|---|---|---|
-| **Sharadar SF1** (via Quandl/Nasdaq) | ~$100 | Point-in-time fundamentals + index membership |
-| **Norgate Data** | ~$300 | Full historical S&P constituents back to inception, delisted included |
-| **SimFin Premium** | ~$50 | Some historical constituents |
-
-Effort: 4–6 hours (data feed integration, schema changes for `index_membership(symbol, index, start_date, end_date)` table)
-
-#### Tier 3 — Institutional ($$$$)
-S&P direct, Bloomberg, FactSet, Refinitiv. Out of scope for retail.
-
-### Proposed implementation (Tier 1)
-
-1. Add `quantamental/research/historical_universe.py`:
-   - `build_backtest_universe(start: date, end: date) -> list[dict]` — returns ticker + active period
-   - Combines current S&P 1500 + Polygon delisted tickers
-2. Add new QuestDB table `ticker_metadata`:
-   ```sql
-   CREATE TABLE ticker_metadata (
-       symbol SYMBOL CAPACITY 4096 INDEX,
-       active BOOLEAN,
-       delisted_date DATE,
-       sector STRING,
-       last_updated TIMESTAMP
-   ) TIMESTAMP(last_updated);
-   ```
-3. Backtest engine (Month 2) filters universe by `(active = true) OR (delisted_date >= backtest_date)` for each backtest day
-4. Document remaining bias in every backtest result header (e.g. "Universe: S&P 1500 current + Polygon delisted since 2024-06-01. NOT point-in-time index membership — see TECH_DEBT.md D12.")
+- `score_components`;
+- `diagnose_alpha`;
+- Alpha Validation dashboard.
 
 ### Acceptance
-- `python scripts/build_universe.py --stage backtest --start 2024-06-01` writes a JSON file with both active and recently-delisted tickers
-- Loading shows ~1,300 active + ~50–100 delisted (rough estimate based on typical delisting frequency)
-- Backtest results header explicitly notes the remaining bias
 
-### Estimated effort
-**Tier 1**: 2–3 hours
-**Tier 2** (with paid feed): 4–6 hours
+- Constant synthetic factor produces `NO_VARIATION`, not just `0.0`.
+- Dashboard shows dead/degenerate factors.
 
-### Recommendation
-Don't implement until Month 2 backtest engine work begins. Tier 1 is the right starting point — eliminates ~80% of bias for $0. Upgrade to Tier 2 only if backtests show suspicious results that warrant deeper investigation.
+### Effort
+
+1-2 hours
 
 ---
 
-## Total remaining effort estimate
+## D9 — Stale Features Still Contribute Full Feature Values
 
-| Item | Severity | Effort |
-|---|---|---|
-| D4 OHLCV validation | MEDIUM | 1–2h |
-| D5 2-day regime confirm | MEDIUM | 2–3h |
-| D6 FRED incremental | MEDIUM | 1h |
-| D7 Alert dedup | MEDIUM | 1–2h |
-| D8 Percentile yield | LOW | 1–2h |
-| D9 `%` escape | LOW | 0.5h |
-| D10 Market timezone | LOW | 0.5h |
-| D11 NaN handling | LOW | 0.5h |
-| **D12 Survivorship bias** | **MEDIUM** (Month 2 blocker) | **2–3h** |
-| **Total** | | **~11–15h** |
+**Status**: 🔴 not started
+**Files**: `quantamental/alpha/ranking.py`,
+`quantamental/alpha/features.py`
 
-Recommended order if/when picked up:
+### Problem
 
-1. **D5** (highest spec-compliance value, regime stability)
-2. **D11, D10, D9** (quick wins, ~1.5h combined)
-3. **D7** (user-visible quality)
-4. **D4, D6** (data hygiene)
-5. **D8** (analytical refinement, depends on having multi-year data first)
-6. **D12** (do this BEFORE starting any Month 2 backtest work — it's a hard prerequisite for valid backtest results)
+The ranker flags stale/no-price rows and applies a data-quality penalty. But
+momentum, drawdown, volatility, and other stale-input-derived features can still
+contribute their full component values.
 
----
+### Proposed Fix
 
-## How to use this file
+Choose one:
 
-When you decide to tackle any item:
+1. Exclude stale names from ranking entirely.
+2. Keep them visible but zero out all price-derived feature components.
+3. Force stale names to `AVOID` and make all non-quality components neutral.
 
-1. Pick one item from above
-2. Tell Claude: "Let's fix D5" (or whichever number)
-3. Claude reads this file, the referenced source files, and writes a focused implementation
-4. After fix lands: change `Status: 🔴 not started` → `Status: 🟢 fixed (YYYY-MM-DD)`, add a brief `Resolution:` line at the bottom of that section
+### Acceptance
+
+- Synthetic stale price older than threshold cannot benefit from stale momentum
+  or drawdown.
+- Stale names remain visible as `AVOID` for operator awareness.
+
+### Effort
+
+1 hour
 
 ---
 
-## 🟢 D14 — Fundamentals scope reduced to candidate list
+## D10 — PEAD Decay And Quantization Are Not Ready For Reactivation
 
-**Status**: 🟢 resolved (2026-04-27)
-**Severity**: design decision (not a defect)
-**Files**: `quantamental/scripts/backfill_fundamentals.py`, `quantamental/data/ingest/yfinance_fundamentals.py`, `quantamental/scripts/daily_pipeline.py`
+**Status**: 👀 observe-only
+**Files**: `quantamental/signals/stock.py`,
+`quantamental/signals/earnings.py`
 
-### Context
-Fundamentals were originally backfilled across all ~1,386 research-universe tickers. yfinance hits Yahoo IP-level rate limits aggressively at that scale (45+ min runs, frequent empty-body throttling). More importantly: **no signal currently consumes the `fundamentals` QuestDB table** — PEAD reads earnings events from SQLite, technicals don't need fundamentals at all. We were paying a steep cost for unused data.
+### Problem
 
-### Decision
-Scope `backfill_fundamentals.py` default to the **candidate list** (~26 tickers, ~30s, reliable). The full research universe remains opt-in via `--research-universe` for the rare case someone is prototyping a fundamental factor scan. Future fundamental-driven signals (valuation overlays, fundamental momentum, leverage filters) only need to fire on candidates anyway, since that's the trading universe.
+PEAD is currently disabled in alpha scoring, which is appropriate. Before it is
+ever re-enabled:
 
-### Resolution
-- `backfill_fundamentals.py`: candidate list is now the default; `--research-universe` flag for full sweep (auto-applies 45s batch pauses).
-- `yfinance_fundamentals.py`: default `batch_pause=0` (irrelevant under 100 tickers); CLI auto-bumps to 45s when `--research-universe` is selected.
-- `daily_pipeline.py`: new `refresh_fundamentals` step runs every Monday on the candidate list (~30s, idempotent, skipped silently other days).
-- Candidate list editing now has three sync'd paths: CLI (`manage_candidates.py`), dashboard Panel E, direct JSON edit. All write through `config.universe.save_candidate_list()`.
+- linear 28-day decay needs empirical support;
+- integer rounding of decayed PEAD loses information;
+- source governance must be implemented.
 
-### Revisit if
-A future signal needs fundamentals across the full S&P 1500 (e.g. systematic factor scoring). At that point: bulk-backfill once with `--research-universe`, then rely on weekly Monday candidate refreshes plus quarterly full-universe top-ups.
+### Proposed Fix
+
+1. Keep PEAD as float through stock aggregation.
+2. Estimate decay curve from reviewed historical PEAD events.
+3. Do not activate PEAD unless source-reviewed events show positive forward IC.
+
+### Acceptance
+
+- PEAD score can be float.
+- PEAD diagnostics show decay-window sensitivity.
+- Only `APPROVED` PEAD rows can be used for alpha tests.
+
+### Effort
+
+2-4 hours, after D19 source governance
+
+---
+
+## D11 — Portfolio Target Weights Ignore Conviction
+
+**Status**: 🔴 not started
+**Files**: `quantamental/alpha/portfolio.py`,
+`quantamental/dashboard/panels.py`
+
+### Problem
+
+Selected names receive equal target weights. A score-75 `TOP_BUY` gets the same
+suggested weight as a score-41 `HOLD`.
+
+For manual execution this is suggestion quality, not an execution bug, but the
+dashboard should provide a better starting point.
+
+### Proposed Fix
+
+Weight selected names by conviction:
+
+```text
+raw_weight = max(alpha_score - 50, 0)
+normalize to deployment cap
+clip to max_weight
+respect min_weight where possible
+```
+
+### Acceptance
+
+- Target weights are monotone in alpha score after clipping.
+- Weights still respect deployment cap and single-name max.
+
+### Effort
+
+1-2 hours
+
+---
+
+## D12 — Macro And Sector Deployment Caps Do Not Compound
+
+**Status**: 🔴 not started
+**Files**: `quantamental/alpha/portfolio.py`
+
+### Problem
+
+Current deployment caps use the tighter of macro and sector caps. If macro is
+risk-off and sector is negative, deployment still caps at 50%, not 35%.
+
+For a manual system this is suggestion quality, but compounding caps gives a
+clearer risk signal.
+
+### Proposed Fix
+
+Apply multiplicative caps:
+
+```text
+cap = macro_cap * sector_cap
+```
+
+### Acceptance
+
+- Risk-off plus negative sector produces a stricter cap than either condition
+  alone.
+
+### Effort
+
+30 minutes
+
+---
+
+## D13 — Bucket Thresholds Are Absolute Rather Than Adaptive
+
+**Status**: 🔴 not started
+**Files**: `quantamental/alpha/ranking.py`
+
+### Problem
+
+`TOP_BUY` and `BUY` use absolute alpha-score thresholds. In flat markets the
+distribution can compress and produce no top buys; in hot markets it can
+over-fire.
+
+### Proposed Fix
+
+Use rank-percentile gating plus recent score dispersion, or make thresholds
+configurable and validate them by walk-forward tests.
+
+### Acceptance
+
+- Bucket counts are stable enough to be useful across flat and strong tapes.
+- Thresholds are documented and validation-backed.
+
+### Effort
+
+1-2 hours
+
+---
+
+## D14 — Disabled Signal Renormalization Is Not Explained
+
+**Status**: 🔴 not started
+**Files**: `quantamental/signals/stock.py`,
+`quantamental/config/signals_registry.yaml`, `quantamental/dashboard/panels.py`
+
+### Problem
+
+When a stock-level signal is disabled, the active signal set is renormalized.
+This may be reasonable, but it changes effective weights and is not visible to
+the user.
+
+### Proposed Fix
+
+Display effective stock-signal weights in the dashboard or diagnostics output.
+
+### Acceptance
+
+- Operator can see post-normalization stock-signal weights.
+
+### Effort
+
+1 hour
+
+---
+
+## D15 — Manual Sector Signals Can Stick Stale Indefinitely
+
+**Status**: 🔴 not started
+**Files**: `quantamental/signals/sector_ai_infra.py`,
+`quantamental/signals/sector.py`, `quantamental/dashboard/panels.py`
+
+### Problem
+
+Manual sector inputs such as TSMC revenue, capex surprise, and API pricing can
+remain active indefinitely if the user forgets to update them. A stale manual
+row can silently freeze part of the sector composite.
+
+### Proposed Fix
+
+1. Add max-age policy per manual signal.
+2. Return `STALE` state when max age is exceeded.
+3. Penalize or neutralize stale manual signals.
+4. Show amber/red badges in the Signals tab.
+
+### Acceptance
+
+- Synthetic stale TSMC/capex/API row becomes stale after configured max age.
+- Dashboard clearly labels stale manual inputs.
+
+### Effort
+
+1-2 hours
+
+---
+
+# 🟡 Medium — Reliability And Operations
+
+## D16 — Dashboard Cache Can Mask Data Outages
+
+**Status**: 🔴 not started
+**Files**: `quantamental/dashboard/data.py`,
+`quantamental/dashboard/freshness.py`
+
+### Problem
+
+`@st.cache_data(ttl=60)` helps performance, but a cached snapshot can make a
+database outage look temporarily healthy unless the fetch time and failure state
+are surfaced.
+
+### Proposed Fix
+
+Return `(data, fetched_at, source_status)` or equivalent metadata from dashboard
+loaders. Show cache/fetch time in freshness panel.
+
+### Acceptance
+
+- If QuestDB goes down, dashboard shows stale cached data as stale/cached, not
+  fresh.
+
+### Effort
+
+1-2 hours
+
+---
+
+## D17 — Freshness Coverage Allows Silent Dropout
+
+**Status**: 🔴 not started
+**Files**: `quantamental/dashboard/freshness.py`,
+`quantamental/scripts/check_data.py`
+
+### Problem
+
+The freshness gate allows 90% symbol coverage. In a 50-name universe, that can
+hide five missing tickers unless the user digs deeper.
+
+### Proposed Fix
+
+1. List missing tickers in freshness detail.
+2. Consider separate thresholds:
+   - `WARN` if any active candidate missing;
+   - `FAIL` if more than N missing or if missing ticker is held/ranked.
+3. Make `check_data.py` print missing names explicitly.
+
+### Acceptance
+
+- Missing tickers are visible in dashboard and CLI health output.
+
+### Effort
+
+30-60 minutes
+
+---
+
+## D18 — Market Calendar Logic Is Split
+
+**Status**: 🟡 partial
+**Files**: `quantamental/dashboard/freshness.py`,
+`quantamental/data/ingest/polygon_client.py`,
+`quantamental/scripts/check_data.py`,
+`quantamental/scripts/daily_pipeline.py`
+
+### Problem
+
+Market fetching uses an NYSE calendar when available, while dashboard freshness
+and check-data paths still use weekday approximations in places. This can be
+wrong around holidays and half-days.
+
+### Proposed Fix
+
+Create one shared calendar utility and use it everywhere:
+
+- expected market date;
+- previous trading day;
+- pipeline state date;
+- health checks;
+- dashboard clock.
+
+### Acceptance
+
+- Holiday/weekend/pre-close/post-close tests agree across all modules.
+
+### Effort
+
+1-2 hours
+
+---
+
+## D19 — PEAD Source Governance Is Missing
+
+**Status**: 👀 observe-only
+**Files**: `quantamental/signals/earnings.py`,
+`quantamental/signals/earnings_importer.py`,
+`quantamental/dashboard/panels.py`
+
+### Problem
+
+Provider PEAD data can disagree materially because of fiscal-quarter mismatch,
+GAAP vs adjusted EPS, consensus timing, or provider errors. The AMZN FMP vs
+Nasdaq mismatch is the current example.
+
+### Proposed Fix
+
+Extend `earnings_events` with review metadata:
+
+- `raw_surprise_pct`;
+- `stored_surprise_pct`;
+- `source_priority`;
+- `review_status`;
+- `reviewed_at`;
+- `review_notes`.
+
+Review statuses:
+
+- `AUTO_IMPORTED`;
+- `NEEDS_REVIEW`;
+- `APPROVED`;
+- `REJECTED`;
+- `OVERRIDDEN`.
+
+### Acceptance
+
+- Imports default to `AUTO_IMPORTED`.
+- Extreme/source-disagreed rows become `NEEDS_REVIEW`.
+- Alpha can ignore non-approved PEAD rows.
+
+### Effort
+
+3-5 hours
+
+---
+
+## D20 — Universe Editor Needs Atomic Writes
+
+**Status**: 🔴 not started
+**Files**: `quantamental/config/universe.py`,
+`quantamental/dashboard/panels.py`,
+`quantamental/scripts/manage_candidates.py`
+
+### Problem
+
+Dashboard and pipeline can touch `candidate_list.json` around the same time.
+The save helper writes directly rather than using an atomic temp-file replace
+or file lock.
+
+### Proposed Fix
+
+Write to a temp file and `os.replace()` it into place. Optionally add file
+locking for read/write paths.
+
+### Acceptance
+
+- Interrupted write cannot leave a partial JSON file.
+
+### Effort
+
+30-60 minutes
+
+---
+
+## D21 — Missing Secrets Should Fail Fast
+
+**Status**: 🔴 not started
+**Files**: `quantamental/config/settings.py`,
+`quantamental/data/ingest/polygon_client.py`,
+`quantamental/data/ingest/fred_client.py`
+
+### Problem
+
+Several secrets default to empty string. That can lead to confusing empty API
+responses or late failures.
+
+### Proposed Fix
+
+Fail fast for required runtime steps:
+
+- Polygon key required for market fetch/backfill;
+- FRED key required for macro fetch;
+- FMP key required only when using FMP importer.
+
+### Acceptance
+
+- Missing required key produces a clear error before network calls.
+
+### Effort
+
+30 minutes
+
+---
+
+## D22 — Provider Fetch Failures Need Typed Errors And Timeouts
+
+**Status**: 🔴 not started
+**Files**: `quantamental/data/ingest/polygon_client.py`,
+`quantamental/data/ingest/fred_client.py`,
+`quantamental/signals/earnings_importer.py`,
+`quantamental/scripts/daily_pipeline.py`
+
+### Problem
+
+Some provider paths return empty DataFrames after retry exhaustion. Callers
+cannot always distinguish real zero rows from API failure. Some calls may also
+hang without explicit timeout support.
+
+### Proposed Fix
+
+1. Add typed exceptions:
+   - `PolygonFetchError`;
+   - `FredFetchError`;
+   - provider-specific earnings errors where useful.
+2. Fail pipeline steps when provider fetches truly fail.
+3. Add explicit timeouts where provider clients support them.
+
+### Acceptance
+
+- Provider retry exhaustion marks pipeline step `FAIL`.
+- Real no-data holiday/closed-market paths remain non-fatal when expected.
+
+### Effort
+
+1-2 hours
+
+---
+
+## D23 — SQLite Needs WAL And Backups
+
+**Status**: 🔴 not started
+**Files**: `quantamental/portfolio/tracker.py`,
+`quantamental/signals/earnings.py`, `quantamental/scripts/daily_pipeline.py`
+
+### Problem
+
+SQLite stores positions, journal data, and PEAD events. There is no WAL mode
+or backup rotation. A crash or disk issue can damage the local ledger.
+
+### Proposed Fix
+
+1. Enable `PRAGMA journal_mode=WAL`.
+2. Add daily backup step:
+   - copy `meta.db` to `meta.db.bak.YYYY-MM-DD`;
+   - keep last 14.
+
+### Acceptance
+
+- Pipeline creates rotating SQLite backups.
+- WAL mode is enabled in SQLite initialization.
+
+### Effort
+
+30-60 minutes
+
+---
+
+## D24 — QuestDB Write Idempotency Is Not Explicitly Tested
+
+**Status**: 🔴 not started
+**Files**: `quantamental/data/ingest/questdb_writer.py`,
+`quantamental/tests/test_questdb.py`
+
+### Problem
+
+The project assumes repeated writes do not create damaging duplicates, but the
+dedup/idempotency behavior should be explicitly tested.
+
+### Proposed Fix
+
+Add test that writes identical OHLCV rows twice and asserts row count is stable
+or that query paths select the intended latest unique row.
+
+### Acceptance
+
+- Duplicate write behavior is documented by tests.
+
+### Effort
+
+1 hour
+
+---
+
+## D25 — Data-Quality Audit Ledger And Validation Manifest Are Missing
+
+**Status**: 🟢 fixed / accepted
+**Files**: `quantamental/data/quality.py`,
+`quantamental/scripts/check_data.py`, `quantamental/scripts/daily_pipeline.py`,
+`quantamental/alpha/reporting.py`, `quantamental/scripts/backtest_alpha.py`,
+`quantamental/scripts/alpha_performance.py`, `quantamental/dashboard/data.py`,
+`quantamental/dashboard/app.py`, `quantamental/dashboard/panels.py`
+
+### Problem
+
+Data-quality checks currently exist, but too much of the evidence is terminal
+output or transient dashboard state. A stale ticker, missing OHLCV row,
+provider outage, low coverage check, zero-volume row, suspicious price move, or
+empty journal warning should become a persistent audit event.
+
+Validation has the same problem: a backtest result needs a manifest explaining
+exactly what data, universe, factor weights, transaction costs, code version,
+and data-quality status produced it. Without that manifest, a good-looking
+validation result is hard to reproduce and hard to trust later.
+
+### Current Implementation
+
+D25 V1 has landed:
+
+- `quantamental/data/quality.py` persists structured data-quality events in
+  SQLite.
+- `scripts/check_data.py` writes failing checks to the audit ledger by default.
+- `scripts/check_data.py` also records an `all_checks_passed` snapshot when
+  data health is clean.
+- `scripts/daily_pipeline.py` writes per-step pipeline audit events.
+- `save_backtest_report()` can write a validation manifest beside report CSVs.
+- `scripts/backtest_alpha.py` saves a manifest with universe, parameters,
+  input row counts, input as-of dates, and git commit when available.
+- `save_alpha_performance_report()` saves performance manifests and latest
+  manifest pointers.
+- `scripts/alpha_performance.py` saves a validation manifest and prints
+  `PASS` / `WATCH` / `FAIL`.
+- The dashboard Alpha tab shows latest data-quality audit events and the latest
+  validation status.
+
+### Proposed Fix
+
+1. Add a persistent `data_quality_events` ledger in SQLite or Parquet.
+2. Store one row per check with:
+   - `run_id`;
+   - `asof_date`;
+   - `component`;
+   - `symbol`;
+   - `severity`;
+   - `check_name`;
+   - `status`;
+   - `observed`;
+   - `expected`;
+   - `detail`;
+   - `fix_hint`;
+   - `created_at`.
+3. Update `scripts/check_data.py` and daily pipeline checks to write audit
+   rows, not just print warnings.
+4. Add a validation manifest beside every backtest / alpha-performance report:
+   - universe snapshot;
+   - date range;
+   - transaction-cost assumption;
+   - factor weights;
+   - code commit when available;
+   - data-quality status at run time;
+   - input table as-of dates.
+5. Surface latest audit status and latest validation manifest on the dashboard.
+
+### Acceptance
+
+- Running data health creates persistent audit rows.
+- Dashboard can list current failing symbols and last successful audit time.
+- Every saved validation report has a manifest that can be used to rerun it.
+- Alpha Validation panel shows whether the result is `PASS`, `WATCH`, or
+  `FAIL`, and whether it was produced from trusted data.
+
+### Effort
+
+3-5 hours
+
+---
+
+# 🟢 Low — Hygiene And Maintainability
+
+## D26 — Type And Unit Consistency
+
+**Status**: 🔴 not started
+**Files**: `quantamental/portfolio/tracker.py`,
+`quantamental/alpha/portfolio.py`, `quantamental/dashboard/panels.py`
+
+### Problem
+
+Portfolio weights are percentages in some places and fractions in others.
+
+### Proposed Fix
+
+Adopt one internal convention, preferably fractions, and format as percentages
+only at UI/print boundaries.
+
+### Effort
+
+1 hour
+
+---
+
+## D27 — Magic Numbers Should Move To Config
+
+**Status**: 🔴 not started
+**Files**: `quantamental/alpha/ranking.py`,
+`quantamental/alpha/portfolio.py`, `quantamental/signals/stock.py`,
+`quantamental/config/signals_registry.yaml`
+
+### Problem
+
+Important constants are spread across modules:
+
+- `MAX_PRICE_AGE_DAYS = 7`;
+- `PEAD_DURATION_DAYS = 28`;
+- `min_names = 8`;
+- `max_names = 12`;
+- `max_weight = 0.15`;
+- `min_weight = 0.05`;
+- bucket thresholds.
+
+### Proposed Fix
+
+Move alpha/portfolio parameters to YAML or a config object and display current
+settings in the dashboard.
+
+### Effort
+
+1-2 hours
+
+---
+
+## D28 — Macro Thresholds Are Policy, Not Pure Signal
+
+**Status**: 🔴 not started
+**Files**: `quantamental/signals/macro.py`,
+`quantamental/config/settings.py`, `quantamental/config/signals_registry.yaml`
+
+### Problem
+
+Hard-coded macro thresholds such as VIX and yield levels embed policy
+assumptions. They should be explicit and testable.
+
+### Proposed Fix
+
+Move thresholds into config and add historical-regime sanity tests.
+
+### Effort
+
+1-2 hours
+
+---
+
+## D29 — Trade Journal Review Reminders
+
+**Status**: 🔴 not started
+**Files**: `quantamental/portfolio/journal.py`,
+`quantamental/dashboard/panels.py`
+
+### Problem
+
+The journal can store thesis/review data, but there is no dashboard reminder
+for stale thesis reviews.
+
+### Proposed Fix
+
+Show positions whose thesis review is older than 30 days.
+
+### Effort
+
+30-60 minutes
+
+---
+
+# Month-2 Backtest Readiness Gate
+
+Do not treat any backtest IC, Sharpe, hit rate, or bucket spread as decision
+evidence until these are fixed:
+
+1. D1 strict PEAD cutoff.
+2. D2 walk-forward validation.
+3. D3 net-of-cost validation.
+4. D4 delisting/survivorship handling.
+5. D8 dead-component states.
+6. D25 data-quality audit ledger and validation manifest.
+7. Fixed-seed reproducibility test.
+
+Until then, backtest results are useful for debugging and upper-bound research,
+not for capital confidence.
+
+---
+
+# Test Coverage Gaps
+
+Add tests for:
+
+1. End-to-end pipeline integration with fixture QuestDB/provider stubs.
+2. PEAD point-in-time leakage: event on `T` excluded from `asof=T`.
+3. Stale-data handling: stale names cannot benefit from stale features.
+4. Dashboard global freshness gate on every tab.
+5. Dead-component state: constant factor becomes `NO_VARIATION`.
+6. Missing-price PnL behavior.
+7. Transaction-cost monotonicity.
+8. Delisting carry-through in backtest.
+9. QuestDB write idempotency.
+10. Backtest reproducibility.
+11. Historical regime sanity around known stress periods.
+12. Manual sector signal max-age behavior.
+13. Data-quality ledger persistence and validation-manifest reproducibility.
+
+---
+
+# Suggested Implementation Order
+
+## Phase A — Dashboard Truthfulness
+
+1. D5 + D6: global freshness gate and as-of timestamps.
+2. D8: dead-component state surfaced in validation.
+3. D7: missing-price red row and no clean total PnL when incomplete.
+4. D15: manual sector-signal age policy.
+5. D9: stale feature neutralization.
+6. D25: persistent data-quality ledger for check outputs.
+
+## Phase B — Backtest Integrity
+
+7. D1: strict PEAD cutoff.
+8. D3: net transaction costs across validation.
+9. D4: delisting/survivorship handling.
+10. D2 + D25: walk-forward CLI, validation gate, and manifest.
+
+## Phase C — Operational Hygiene
+
+11. D18 + D13 from prior roadmap: shared market calendar and market-date state
+    file naming.
+12. D20: atomic universe writes.
+13. D21 + D22: fail-fast secrets and typed provider errors.
+14. D23: SQLite WAL and backup.
+15. D17: list missing tickers in coverage checks.
+
+## Phase D — Suggestion Quality
+
+15. D11: conviction-weighted target weights.
+16. D12: compound deployment caps.
+17. D13: adaptive bucket thresholds.
+18. D14: effective-weight display.
+
+## Phase E — Cleanup
+
+19. D24-D28 and test coverage batch.
+
+---
+
+# Resolved / Accepted Decisions
+
+## R1 — 2-Day Regime Confirmation
+
+**Status**: 🟢 fixed
+**Files**: `quantamental/signals/aggregator.py`
+
+`compute_confirmed_regime()` exists and `run_and_store()` writes both raw
+`regime` and `confirmed_regime`.
+
+Remaining follow-up: make the dashboard show raw-vs-confirmed disagreement more
+prominently on all decision surfaces.
+
+## R2 — PEAD Observe-Only
+
+**Status**: 👀 accepted current mode
+**Files**: `quantamental/alpha/ranking.py`,
+`quantamental/signals/earnings.py`, `quantamental/signals/earnings_importer.py`
+
+PEAD is collected, winsorized, displayed, and stored, but `pead_signal` has
+zero alpha weight until source governance and validation pass.
+
+## R3 — ETF / Single-Name Separation
+
+**Status**: 🟢 fixed
+**Files**: `quantamental/config/universe.py`,
+`quantamental/dashboard/app.py`, `quantamental/dashboard/panels.py`
+
+Alpha/PEAD workflows default to single-name equities. ETFs have their own
+dashboard area and instrument labels.
+
+## R4 — Query Parameter Binding
+
+**Status**: 🟢 fixed
+**Files**: `quantamental/data/ingest/questdb_connection.py`,
+`quantamental/tests/test_hardening.py`
+
+Parameterized query helpers and symbol-list binding are covered by tests.
+
+---
+
+# Operational Note
+
+Last observed local state:
+
+```text
+main...origin/main [ahead 1]
+```
+
+Push when GitHub connectivity allows:
+
+```bash
+git push origin main
+```

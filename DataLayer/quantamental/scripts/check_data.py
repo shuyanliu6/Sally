@@ -13,13 +13,15 @@ Prints a colour-coded report for:
 """
 
 import os, sys
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
+from uuid import uuid4
 
 if __package__ in (None, ""):
     from _bootstrap import add_project_root
     add_project_root(__file__)
 
 from quantamental.config.universe import FRED_SERIES, load_candidate_list, load_research_universe
+from quantamental.data.quality import DataQualityEvent, record_data_quality_events
 from quantamental.data.ingest.questdb_connection import symbol_list_clause
 
 # ── ANSI colours ──────────────────────────────────────────────────────────────
@@ -53,6 +55,63 @@ def trading_days_in_range(start: date, end: date) -> int:
             count += 1
         d += timedelta(days=1)
     return count
+
+
+def _issue_to_event(issue: str, *, run_id: str, asof_date: date) -> DataQualityEvent:
+    check_name, symbol = issue.split(":", 1) if ":" in issue else (issue, None)
+    severity = "WARN"
+    status = "WARN"
+    if any(token in check_name for token in ["missing", "bad", "error", "out_of_range", "no_"]):
+        severity = "ERROR"
+        status = "FAIL"
+
+    if check_name.startswith(("stale", "gaps", "bad_data", "missing")):
+        component = "OHLCV"
+        fix_hint = "python scripts/daily_pipeline.py --step fetch_market --force"
+    elif check_name.startswith("macro"):
+        component = "Macro"
+        fix_hint = "python scripts/daily_pipeline.py --step calc_signals --force"
+    elif check_name.startswith(("signals", "score", "no_signals")):
+        component = "Regime Signals"
+        fix_hint = "python scripts/daily_pipeline.py --step calc_signals --force"
+    elif check_name.startswith(("portfolio", "empty_journal")):
+        component = "Portfolio"
+        fix_hint = "Review portfolio SQLite state and journal entries"
+    else:
+        component = "Data Health"
+        fix_hint = "Review data-health output"
+
+    return DataQualityEvent(
+        run_id=run_id,
+        asof_date=asof_date.isoformat(),
+        component=component,
+        symbol=symbol,
+        severity=severity,
+        check_name=check_name,
+        status=status,
+        detail=issue,
+        fix_hint=fix_hint,
+    )
+
+
+def audit_issues(all_issues: list[str], *, run_id: str, asof_date: date, path: str | None = None) -> int:
+    if all_issues:
+        events = [_issue_to_event(issue, run_id=run_id, asof_date=asof_date) for issue in all_issues]
+    else:
+        events = [
+            DataQualityEvent(
+                run_id=run_id,
+                asof_date=asof_date.isoformat(),
+                component="Data Health",
+                symbol=None,
+                severity="INFO",
+                check_name="all_checks_passed",
+                status="OK",
+                detail="all data-health checks passed",
+                fix_hint=None,
+            )
+        ]
+    return record_data_quality_events(events, path=path) if path else record_data_quality_events(events)
 
 
 # ── QuestDB connection ────────────────────────────────────────────────────────
@@ -366,8 +425,13 @@ def main():
     parser = argparse.ArgumentParser(description="Data health check")
     parser.add_argument("--days", type=int, default=20,
                         help="How many trading days to inspect (default: 20)")
+    parser.add_argument("--no-audit", action="store_true",
+                        help="Do not persist failing checks to the data-quality ledger")
+    parser.add_argument("--audit-path", default=None,
+                        help="SQLite path for data-quality audit events")
     args = parser.parse_args()
 
+    run_id = f"data-health-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
     print(f"{BOLD}Quantamental Data Health Check — {date.today()}{RESET}")
     print(f"Checking last {args.days} trading days\n")
 
@@ -380,6 +444,12 @@ def main():
     all_issues += check_portfolio()
 
     print_summary(all_issues)
+    if not args.no_audit:
+        inserted = audit_issues(all_issues, run_id=run_id, asof_date=date.today(), path=args.audit_path)
+        if inserted:
+            print(f"\nRecorded {inserted} data-quality audit event(s). run_id={run_id}")
+        else:
+            print(f"\nNo data-quality audit events recorded. run_id={run_id}")
     sys.exit(1 if all_issues else 0)
 
 

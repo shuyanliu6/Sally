@@ -12,7 +12,7 @@ if __package__ in (None, ""):
 
 from quantamental.alpha.backtest import run_backtest
 from quantamental.alpha.features import load_backtest_inputs_from_questdb
-from quantamental.alpha.reporting import save_backtest_report
+from quantamental.alpha.reporting import build_validation_manifest, save_backtest_report
 from quantamental.config.universe import load_equity_candidate_list
 
 
@@ -55,8 +55,20 @@ def main() -> int:
 
     print(result.metrics.to_string(index=False))
     if not args.no_save:
-        paths = save_backtest_report(result)
+        manifest = build_validation_manifest(
+            report_type="alpha_backtest",
+            parameters={
+                "start": args.start.isoformat(),
+                "end": args.end.isoformat(),
+                "top_n": args.top_n,
+                "transaction_cost_bps": args.cost_bps,
+            },
+            symbols=symbols,
+            inputs=inputs,
+        )
+        paths = save_backtest_report(result, manifest=manifest)
         print(f"\nSaved backtest metrics: {paths['metrics']}")
+        print(f"Saved validation manifest: {paths['manifest']}")
     return 0
 
 

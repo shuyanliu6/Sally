@@ -1203,6 +1203,8 @@ def render_panel_i_alpha_validation(performance: dict[str, pd.DataFrame] | None 
     performance = performance or {}
     headline = performance.get("headline", pd.DataFrame())
     buckets = performance.get("bucket_summary", pd.DataFrame())
+    manifest = performance.get("manifest", {}) or {}
+    validation = manifest.get("validation_status", {}) if isinstance(manifest, dict) else {}
 
     if headline.empty:
         st.info(
@@ -1234,13 +1236,21 @@ def render_panel_i_alpha_validation(performance: dict[str, pd.DataFrame] | None 
     h20 = row_for_horizon(20)
     h40 = row_for_horizon(40)
 
-    c1, c2, c3, c4 = st.columns(4)
+    status = str(validation.get("status", "WATCH")).upper()
+    status_kind = "ok" if status == "PASS" else "risk" if status == "FAIL" else "watch"
+    reason = validation.get("reason", "validation manifest not available")
+    c0, c1, c2, c3, c4 = st.columns(5)
+    c0.metric("Validation", status, str(reason))
     c1.metric("20D top spread", _signed_pct(h20.get("top_minus_avoid")), "TOP/BUY minus AVOID")
     c2.metric("20D rank IC", f"{_num(h20.get('mean_rank_ic')):+.3f}", f"{int(_num(h20.get('rank_dates')))} dates")
     c3.metric("40D top spread", _signed_pct(h40.get("top_minus_avoid")), "TOP/BUY minus AVOID")
     c4.metric("40D rank IC", f"{_num(h40.get('mean_rank_ic')):+.3f}", f"{int(_num(h40.get('rank_dates')))} dates")
 
-    flags: list[tuple[str, str]] = []
+    flags: list[tuple[str, str]] = [(status_kind, f"Validation {status}")]
+    if manifest.get("generated_at"):
+        flags.append(("ok", f"Manifest {str(manifest.get('generated_at'))[:19]} UTC"))
+    if manifest.get("code_commit"):
+        flags.append(("watch", f"Commit {str(manifest.get('code_commit'))[:7]}"))
     for _, row in headline.sort_values("horizon").iterrows():
         horizon = int(_num(row.get("horizon")))
         spread = _num(row.get("top_minus_avoid"))
@@ -1340,6 +1350,50 @@ def render_panel_i_alpha_validation(performance: dict[str, pd.DataFrame] | None 
         return f"color: {color}; font-weight: 700"
 
     styled = bucket_display.style.map(bucket_style, subset=["Bucket"]) if "Bucket" in bucket_display else bucket_display
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+
+def render_panel_l_data_quality_audit(events: pd.DataFrame | None = None):
+    panel_header("Data Quality Audit", "Latest checks", "persistent ledger")
+    events = events if events is not None else pd.DataFrame()
+    if events.empty:
+        st.info("No data-quality audit events recorded yet. Run `python scripts/check_data.py`.")
+        return
+
+    display = events.copy().head(25)
+    for col in ["created_at", "asof_date"]:
+        if col in display:
+            display[col] = display[col].astype(str).str.slice(0, 19)
+    keep = [
+        "created_at",
+        "run_id",
+        "asof_date",
+        "component",
+        "symbol",
+        "severity",
+        "status",
+        "check_name",
+        "detail",
+        "fix_hint",
+    ]
+    display = display[[col for col in keep if col in display.columns]]
+
+    latest_run = str(display["run_id"].iloc[0]) if "run_id" in display and not display.empty else "-"
+    latest = events[events["run_id"].eq(latest_run)] if "run_id" in events else events.head(0)
+    fail_count = int(latest["status"].astype(str).str.upper().isin(["FAIL", "ERROR"]).sum()) if "status" in latest else 0
+    warn_count = int(latest["status"].astype(str).str.upper().eq("WARN").sum()) if "status" in latest else 0
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Latest audit run", latest_run[-12:] if latest_run != "-" else "-")
+    c2.metric("Failing checks", fail_count)
+    c3.metric("Warnings", warn_count)
+
+    def status_style(value):
+        value = str(value).upper()
+        color = COLOR["negative"] if value in {"FAIL", "ERROR"} else COLOR["warning"] if value == "WARN" else COLOR["positive"]
+        return f"color: {color}; font-weight: 700"
+
+    styled = display.style.map(status_style, subset=["status"]) if "status" in display else display
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
 

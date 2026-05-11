@@ -22,6 +22,7 @@ from quantamental.dashboard.data import (
     load_latest_alpha_performance,
     load_latest_alpha_ranks,
     load_latest_prices,
+    load_recent_data_quality_events,
     load_regime_signals,
     load_sector_signals,
 )
@@ -37,6 +38,7 @@ from quantamental.dashboard.panels import (
     render_panel_i_alpha_validation,
     render_panel_j_pead_events,
     render_panel_k_etfs,
+    render_panel_l_data_quality_audit,
     render_portfolio_risk,
     render_dashboard_clock,
     render_data_freshness_gate,
@@ -79,6 +81,7 @@ def main():
     pead_events = load_active_pead_events(alpha_asof)
     alpha_performance = load_latest_alpha_performance()
     freshness = load_data_freshness()
+    data_quality_events = load_recent_data_quality_events()
     latest_prices = load_latest_prices()
     positions_df = get_open_positions(SQLITE_PATH)
 
@@ -96,6 +99,7 @@ def main():
         render_panel_h_alpha(alpha_ranks, artifact_info=alpha_artifact)
         render_panel_j_pead_events(pead_events, alpha_asof)
         render_panel_i_alpha_validation(alpha_performance)
+        render_panel_l_data_quality_audit(data_quality_events)
 
     with signals_tab:
         render_panel_a(signals_df)

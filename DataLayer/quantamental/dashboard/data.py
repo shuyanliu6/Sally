@@ -113,14 +113,25 @@ def load_alpha_rank_artifact_info() -> dict:
 
 
 @st.cache_data(ttl=60)
-def load_latest_alpha_performance() -> dict[str, pd.DataFrame]:
+def load_latest_alpha_performance() -> dict:
     try:
         from quantamental.alpha.reporting import load_latest_alpha_performance as _load
 
         return _load()
     except Exception as exc:
         st.warning(f"Alpha performance unavailable: {exc}")
-        return {"headline": pd.DataFrame(), "bucket_summary": pd.DataFrame()}
+        return {"headline": pd.DataFrame(), "bucket_summary": pd.DataFrame(), "manifest": {}}
+
+
+@st.cache_data(ttl=60)
+def load_recent_data_quality_events(limit: int = 100) -> pd.DataFrame:
+    try:
+        from quantamental.data.quality import load_data_quality_events
+
+        return load_data_quality_events(limit=limit, path=SQLITE_PATH)
+    except Exception as exc:
+        st.warning(f"Data-quality audit ledger unavailable: {exc}")
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=60)

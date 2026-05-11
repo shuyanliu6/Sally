@@ -12,7 +12,11 @@ if __package__ in (None, ""):
 
 from quantamental.alpha.features import load_backtest_inputs_from_questdb
 from quantamental.alpha.performance import build_performance_report
-from quantamental.alpha.reporting import save_alpha_performance_report
+from quantamental.alpha.reporting import (
+    build_validation_manifest,
+    save_alpha_performance_report,
+    validation_status_from_headline,
+)
 from quantamental.config.universe import load_equity_candidate_list
 
 
@@ -58,8 +62,23 @@ def main() -> int:
     print(report.bucket_summary.to_string(index=False))
 
     if not args.no_save:
-        paths = save_alpha_performance_report(report)
+        validation = validation_status_from_headline(report.headline)
+        manifest = build_validation_manifest(
+            report_type="alpha_performance",
+            parameters={
+                "start": args.start.isoformat(),
+                "end": args.end.isoformat(),
+                "top_n": args.top_n,
+                "frequency": args.frequency,
+            },
+            symbols=symbols,
+            inputs=inputs,
+        )
+        manifest["validation_status"] = validation
+        paths = save_alpha_performance_report(report, manifest=manifest)
         print(f"\nSaved headline report: {paths['latest_headline']}")
+        print(f"Saved validation manifest: {paths['latest_manifest']}")
+        print(f"Validation status: {validation['status']} — {validation['reason']}")
     return 0
 
 

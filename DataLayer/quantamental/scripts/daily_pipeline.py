@@ -460,9 +460,11 @@ def run_pipeline(
     max_retries: int = 3,
     retry_delay: int = 5,
 ):
+    from quantamental.data.quality import DataQualityEvent, record_data_quality_events
     from quantamental.data.ingest.questdb_writer import init_schema
     from quantamental.portfolio.tracker import init_db
 
+    run_id = f"pipeline-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
     logger.info("=== Pipeline started: step=%s force=%s at %s ===",
                 step, force, datetime.now(UTC).isoformat())
 
@@ -517,6 +519,29 @@ def run_pipeline(
     logger.info("\n".join(lines))
 
     failed = [s for s, r in results.items() if r == "FAIL"]
+    audit_events = []
+    for step_name, result in results.items():
+        severity = "ERROR" if result == "FAIL" else "INFO"
+        status = "FAIL" if result == "FAIL" else "OK"
+        audit_events.append(
+            DataQualityEvent(
+                run_id=run_id,
+                asof_date=date.today().isoformat(),
+                component="Pipeline",
+                symbol=None,
+                severity=severity,
+                check_name=f"pipeline_{step_name}",
+                status=status,
+                observed=result,
+                expected="OK",
+                detail=f"{step_name}: {result}",
+                fix_hint="python scripts/daily_pipeline.py --resume" if result == "FAIL" else None,
+            )
+        )
+    try:
+        record_data_quality_events(audit_events)
+    except Exception as exc:
+        logger.warning("Could not persist pipeline audit events: %s", exc)
     return len(failed) == 0
 
 
